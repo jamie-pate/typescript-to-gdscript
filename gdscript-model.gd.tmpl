@@ -1,0 +1,42 @@
+extends Reference
+{{ if comment -}}
+# {comment}
+
+{{ endif -}}
+
+{{ for import in imports -}}
+const {import.name} = preload({import.src})
+{{ endfor -}}
+
+{{ for var_decl in vars -}}
+var {var_decl.name}: {var_decl.decl_type}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
+{{ endfor -}}
+
+{{ if src_type.array_item_ctor }}var items: {src_type.name}{{if src_type.init }}= {src_type.init}{{ endif }}{{ endif }}
+
+func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}):
+    update(src)
+
+func update(src: { src_type.name }):
+    # custom import logic can be added by extending this model
+
+    {{ if src_type.array_item_ctor -}}
+    for __item__ in src:
+        items.append({src_type.array_item_ctor.start}__item__{src_type.array_item_ctor.end})
+    {{- else -}}
+    {{- for var_init in vars -}}
+    {{- if var_init.collection -}}
+    {var_init.name} = {var_init.collection.init}
+    {{- if var_init.collection.is_array }}
+    for __item__ in src.{var_init.src_name}:
+        {var_init.name}.append({var_init.ctor.start}__item__{var_init.ctor.end})
+    {{ endif }}{# is_array -#}
+    {{- if var_init.collection.is_dict }}
+    for __key__ in src.{var_init.src_name}:
+        {var_init.name}[__key__] = {var_init.ctor.start}src.{var_init.src_name}[__key__]{var_init.ctor.end}
+    {{ endif }}{# is_dict -#}
+    {{- else }}{# var_init.collection -#}
+    {var_init.name} = {var_init.ctor.start}data.{var_init.src_name}{var_init.ctor.end}
+    {{ endif -}}{# var_init.collection -#}
+    {{- endfor -}}
+    {{- endif }}

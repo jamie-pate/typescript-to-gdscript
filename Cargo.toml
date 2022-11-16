@@ -1,0 +1,12 @@
+[package]
+name = "typescript-to-gdscript"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+deno_ast = "0.21.0"
+tinytemplate = "1.2.1"
+serde = { version = "1.0", features = ["derive"] }
+convert_case = "0.6.0"

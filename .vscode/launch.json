@@ -1,0 +1,54 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'typescript-to-gdscript'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=typescript-to-gdscript",
+                    "--package=typescript-to-gdscript"
+                ],
+                "filter": {
+                    "name": "typescript-to-gdscript",
+                    "kind": "bin"
+                }
+            },
+            "console":"internalConsole",
+            "args": [
+                "--debug-print",
+                "./gdscript-model.gd.tmpl",
+                "./output",
+                "test-fixtures/test-interface.ts"
+            ],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "rust: cargo build"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'typescript-to-gdscript'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=typescript-to-gdscript",
+                    "--package=typescript-to-gdscript"
+                ],
+                "filter": {
+                    "name": "typescript-to-gdscript",
+                    "kind": "bin"
+                }
+            },
+            "console":"internalConsole",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "rust: cargo build"
+        }
+    ]
+}
