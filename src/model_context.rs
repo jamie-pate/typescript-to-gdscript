@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, collections::HashSet};
 
 use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct ModelImportContext {
-    name: String,
-    src: String,
+    pub name: String,
+    pub src: String,
 }
 
 // Extra template data that's required if the variable is an array or dictionary
@@ -16,18 +16,71 @@ pub struct ModelVarCollection {
     pub is_array: bool,
     pub is_dict: bool,
 }
+lazy_static! {
+    static ref BUILTINS: HashSet<&'static str> = {
+        let mut b = HashSet::new();
+        for builtin in [
+            "", "Array", "Dictionary"
+        ] {
+            b.insert(builtin);
+        };
+        b
+    };
+}
 
+impl ModelValueCtor {
+    pub fn new(name: &str) -> Self {
+        ModelValueCtor::new_(name, false, true)
+    }
+    pub fn nullable(name: &str) -> Self {
+        ModelValueCtor::new_(name, true, true)
+    }
+    // todo: lazy static?
+    pub fn empty() -> Self {
+        ModelValueCtor::new_("", false, false)
+    }
+    fn new_(name: &str, nullable: bool, parens: bool) -> Self {
+        let builtin = BUILTINS.contains(name);
+        let new_str = if !builtin { ".new" } else {""};
+        let (lparen_str, rparen_str) = if parens { ("(", ")") } else { ("", "") };
+        ModelValueCtor {
+            name: name.to_string(),
+            builtin,
+            start: format!("{}{}{}", name, new_str, lparen_str),
+            end: if !nullable { rparen_str.to_string() } else { format!("{} if ", rparen_str) },
+            suffix:if !nullable { None } else { Some(" != null else null".to_string()) }
+        }
+    }
+    pub fn set_nullable(&mut self) {
+        if self.suffix.is_some() {
+            panic!(
+                "Don't want to overwrite ctor suffix{:#?}", &self
+            );
+        }
+        self.end = format!("{} if ", self.end);
+        self.suffix = Some(" != null else null".to_string())
+    }
+}
 // usage: `{ctor.start}__value__{ctor.end} in the template
 #[derive(Serialize)]
+#[derive(Debug)]
 pub struct ModelValueCtor {
+    pub name: String,
+    pub builtin: bool,
     pub start: String,
     pub end: String,
+    // suffix such for cases where we need to put the input value in twice
+    // usage: `{ctor.start}__value__{ctor.end}{{if ctor.suffix}}__value__{ctor.suffix}{{endif}}
+    // for cases like `T.new(__value__) if __value != null else null`
+    pub suffix: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct ModelVarInit {
     // name of the variable in the gdscript object (camel_case)
     pub name: String,
+    // comments
+    pub comment: Option<String>,
     // gdscript type of the variable
     pub decl_type: String,
     // optional initializer for declaration
