@@ -1,4 +1,4 @@
-use std::{path::PathBuf, collections::HashSet};
+use std::{collections::HashSet, path::PathBuf};
 
 use serde::Serialize;
 
@@ -19,11 +19,9 @@ pub struct ModelVarCollection {
 lazy_static! {
     static ref BUILTINS: HashSet<&'static str> = {
         let mut b = HashSet::new();
-        for builtin in [
-            "", "Array", "Dictionary"
-        ] {
+        for builtin in ["", "Array", "Dictionary"] {
             b.insert(builtin);
-        };
+        }
         b
     };
 }
@@ -41,29 +39,34 @@ impl ModelValueCtor {
     }
     fn new_(name: &str, nullable: bool, parens: bool) -> Self {
         let builtin = BUILTINS.contains(name);
-        let new_str = if !builtin { ".new" } else {""};
+        let new_str = if !builtin { ".new" } else { "" };
         let (lparen_str, rparen_str) = if parens { ("(", ")") } else { ("", "") };
         ModelValueCtor {
             name: name.to_string(),
             builtin,
             start: format!("{}{}{}", name, new_str, lparen_str),
-            end: if !nullable { rparen_str.to_string() } else { format!("{} if ", rparen_str) },
-            suffix:if !nullable { None } else { Some(" != null else null".to_string()) }
+            end: if !nullable {
+                rparen_str.to_string()
+            } else {
+                format!("{} if ", rparen_str)
+            },
+            suffix: if !nullable {
+                None
+            } else {
+                Some(" != null else null".to_string())
+            },
         }
     }
     pub fn set_nullable(&mut self) {
         if self.suffix.is_some() {
-            panic!(
-                "Don't want to overwrite ctor suffix{:#?}", &self
-            );
+            panic!("Don't want to overwrite ctor suffix{:#?}", &self);
         }
         self.end = format!("{} if ", self.end);
         self.suffix = Some(" != null else null".to_string())
     }
 }
 // usage: `{ctor.start}__value__{ctor.end} in the template
-#[derive(Serialize)]
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 pub struct ModelValueCtor {
     pub name: String,
     pub builtin: bool,

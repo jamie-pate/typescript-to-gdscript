@@ -300,14 +300,14 @@ fn convert(
                     models.push(get_intf_model(&mut context, &intf));
                     context.comment_pos = None;
                 }
-            },
+            }
             ModuleItem::Stmt(Stmt::Decl(decl)) => {
                 if let Decl::TsInterface(intf) = decl {
                     context.comment_pos = Some(&intf.span);
                     models.push(get_intf_model(&mut context, &intf));
                     context.comment_pos = None;
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -765,7 +765,7 @@ fn update_resolve_from_comments(
 
 fn add_import(context: &ModuleContext, imports: &mut HashMap<String, String>, r: &TypeResolution) {
     // assume it's an imported type if there's a constructor
-    if let Some(ctor) = &r.ctor{
+    if let Some(ctor) = &r.ctor {
         if context.output_type_name != r.name && !ctor.builtin {
             imports.insert(ctor.name.to_string(), format!("\"./{}.gd\"", &r.name));
         }
