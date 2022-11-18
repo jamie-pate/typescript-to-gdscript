@@ -10,7 +10,7 @@ on:
 name: Create release with artifacts
 
 jobs:
-  build-linux:
+  build_linux:
     name: Build (linux,win)
     runs-on: ubuntu-latest
     strategy:
@@ -48,7 +48,7 @@ jobs:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/typescript-to-gdscript*
 
-  build-mac:
+  build_mac:
     name: Build (mac)
     runs-on: macos-latest
     strategy:
@@ -76,10 +76,10 @@ jobs:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/typescript-to-gdscript*
 
-  create-release:
+  create_release:
     name: Create Release
     outputs:
-      upload_url: ${{ steps.create-release.outputs.upload_url }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
     runs-on: ubuntu-latest
     needs:
       - build-mac
@@ -95,19 +95,11 @@ jobs:
           release_name: Release ${{ github.ref }}
           draft: false
           prerelease: true
-      - name: Write release url
-        run: |
-          echo {{ steps.create_release.outputs.upload_url }} > release-url.txt
-      - name: Upload release url
-        uses: actions/upload-artifact@v3
-        with:
-          name: release-url.txt
-          path: release-url.txt
-  upload-release:
+  upload_release:
     name: Upload Release Artifact
     runs-on: ubuntu-latest
     needs:
-      - create-release
+      - create_release
     strategy:
       matrix:
         target:
@@ -116,10 +108,6 @@ jobs:
           - aarch64-apple-darwin
           - x86_64-apple-darwin
     steps:
-      - name: Download release url
-        uses: actions/download-artifact@v3
-        with:
-          name: release-url.txt
       - name: Download artifact ${{ matrix.target }}
         uses: actions/download-artifact@v3
         with:
@@ -127,6 +115,7 @@ jobs:
           path: ${{ matrix.target }}
       - name: Compress ${{ matrix.target }}
         run: |
+          echo "upload-url ${{needs.create_release.outputs.upload_url }}"
           zip -r ${{ matrix.target }}.zip ${{ matrix.target }}
 
       - name: Upload Release Asset
@@ -135,7 +124,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.main.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          upload_url: ${{ needs.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
           asset_path: ./${{ matrix.target }}.zip
           asset_name: ${{ matrix.target}}.zip
           asset_content_type: application/zip
