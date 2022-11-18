@@ -21,8 +21,10 @@ use deno_ast::swc::{
     atoms::Atom,
     common::{comments::Comments, serializer::Type, BytePos, Span},
 };
-use model_context::ModelContext;
-use model_context::{ModelImportContext, ModelValueCtor, ModelVarInit};
+use model_context::{
+    ModelContext, ModelImportContext, ModelSrcType, ModelValueCtor, ModelVarCollection,
+    ModelVarInit,
+};
 use pathdiff::diff_paths;
 use regex::Regex;
 use tinytemplate::{format_unescaped, TinyTemplate};
@@ -37,9 +39,6 @@ use std::{
     path::{self, Path, PathBuf},
     process::exit,
 };
-
-use crate::model_context::ModelVarCollection;
-//use std::fs::File;
 
 const TEMPLATE_NAME: &str = "gdscript-model";
 pub mod model_context;
@@ -195,6 +194,7 @@ struct ModuleContext<'a> {
     debug_print: bool,
     relative_filepath: &'a Path,
     canonical_filepath: &'a Path,
+    output_type_name: String,
     parsed_source: &'a ParsedSource,
     imported_modules: &'a HashMap<PathBuf, ParsedSource>,
     import_specifiers: HashMap<Id, PathBuf>,
@@ -231,7 +231,12 @@ impl<'a> ModuleContext<'a> {
             regexes: ModuleRegexes {
                 gd_type: Regex::new(r"@typescript-to-gdscript-type:\s+(\w+)").unwrap(),
             },
-            stack: if let Some(stack) = stack { stack.to_owned() } else {Vec::new()},
+            stack: if let Some(stack) = stack {
+                stack.to_owned()
+            } else {
+                Vec::new()
+            },
+            output_type_name: "".into(),
             comment_pos: None,
             resolving_local: HashSet::new(),
             debug_print,
@@ -282,21 +287,28 @@ fn convert(
         filename,
         canonical_filepath,
         parsed_source,
-        imports
+        imports,
     );
     extract_import_specifiers(&mut context, module);
 
     for node in module.body.iter() {
-        if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
-            let decl = &export.decl;
-            match decl {
-                Decl::TsInterface(intf) => {
+        match node {
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
+                let decl = &export.decl;
+                if let Decl::TsInterface(intf) = decl {
                     context.comment_pos = Some(&intf.span);
                     models.push(get_intf_model(&mut context, &intf));
                     context.comment_pos = None;
                 }
-                _ => (),
-            }
+            },
+            ModuleItem::Stmt(Stmt::Decl(decl)) => {
+                if let Decl::TsInterface(intf) = decl {
+                    context.comment_pos = Some(&intf.span);
+                    models.push(get_intf_model(&mut context, &intf));
+                    context.comment_pos = None;
+                }
+            },
+            _ => {}
         }
     }
     for model in models.into_iter() {
@@ -314,6 +326,7 @@ fn convert(
 
 fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelContext {
     let (symbol, _tag) = intf.id.to_id();
+    context.output_type_name = String::from(&*symbol);
     let mut imports: HashMap<String, String> = HashMap::new();
     let vars = intf
         .body
@@ -330,7 +343,7 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
             "Model for {} typescript interface in {:?}",
             symbol, context.relative_filepath
         )),
-        src_type: Some(model_context::ModelSrcType {
+        src_type: Some(ModelSrcType {
             name: "Dictionary".to_string(),
             init: Some("{}".to_string()),
             array_item_ctor: None,
@@ -386,7 +399,7 @@ fn resolve_type_ref(
         } else {
             resolve_local_specifier_type(context, imports, type_ref, &id)
         };
-        add_import(imports, &resolved_type);
+        add_import(context, imports, &resolved_type);
         context.stack.pop();
         resolved_type
     } else {
@@ -509,7 +522,7 @@ fn get_intf_model_var(
         context.stack.pop();
         if let Some(src_name) = src_name {
             //  = prop_sig.type_ann?.type_ann;
-            return Some(model_context::ModelVarInit {
+            return Some(ModelVarInit {
                 name: src_name.to_case(Case::Snake),
                 comment: resolved.comment,
                 decl_type: resolved.name,
@@ -542,7 +555,7 @@ fn resolve_local_specifier_type(
                     let result_and_id = resolve_type_decl(context, imports, &decl);
                     if let Some((r, (result_sym, _))) = result_and_id {
                         if String::from(&*result_sym) == String::from(&*id.0) {
-                            add_import(imports, &r);
+                            add_import(context, imports, &r);
                             result = Some(r);
                         }
                     }
@@ -551,7 +564,7 @@ fn resolve_local_specifier_type(
                     let result_and_id = resolve_type_decl(context, imports, &decl);
                     if let Some((r, (result_sym, _))) = result_and_id {
                         if String::from(&*result_sym) == String::from(&*id.0) {
-                            add_import(imports, &r);
+                            add_import(context, imports, &r);
                             result = Some(r);
                         }
                     }
@@ -582,29 +595,30 @@ fn resolve_local_specifier_type(
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(||TypeResolution::from("Dictionary"));
+            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::from("Dictionary"));
             result.collection = Some(ModelVarCollection {
                 init: "{}".to_string(),
                 is_array: false,
                 is_dict: true,
             });
             result
-        },
+        }
         "Array" => {
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
-                type_ref.type_params.as_ref().and_then(|p|p.params.get(0))
+                type_ref.type_params.as_ref().and_then(|p| p.params.get(0))
             {
                 Some(resolve_type(context, imports, &prop_type))
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(||TypeResolution::from("Array"));
-            result.collection = Some(ModelVarCollection { init: "[]".to_string(),
+            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::from("Array"));
+            result.collection = Some(ModelVarCollection {
+                init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
             });
             result
-        },
+        }
         _ => panic!(
             "Unable to resolve type {:?} from {:?}, is it a built in type? {:#?}...{:#?}",
             &id, context.relative_filepath, type_ref, context.stack
@@ -712,7 +726,7 @@ fn resolve_type_decl(
                 alias.id.to_id(),
             ));
             if let Some((r, _)) = &result {
-                add_import(imports, &r);
+                add_import(context, imports, &r);
             }
         }
         Decl::TsInterface(intf) => {
@@ -749,10 +763,10 @@ fn update_resolve_from_comments(
     }
 }
 
-fn add_import(imports: &mut HashMap<String, String>, r: &TypeResolution) {
+fn add_import(context: &ModuleContext, imports: &mut HashMap<String, String>, r: &TypeResolution) {
     // assume it's an imported type if there's a constructor
-    if let Some(ctor) = &r.ctor {
-        if !ctor.builtin {
+    if let Some(ctor) = &r.ctor{
+        if context.output_type_name != r.name && !ctor.builtin {
             imports.insert(ctor.name.to_string(), format!("\"./{}.gd\"", &r.name));
         }
     }

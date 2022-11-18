@@ -21,7 +21,10 @@ func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif
 
 func update(src: { src_type.name }):
     # custom import logic can be added by overriding this function
-{{ if src_type.array_item_ctor -}}
+{# TODO: this is uuuuugly, find some way to template this part? the main challenges are-#}
+{#- a: no way to know the name of the parameter we are assigning from ('src' in this template) -#}
+{#- b: no way to know whether we should use tabs or spaces... or what indentation we want for newlines -#}
+{{- if src_type.array_item_ctor -}}
     for __item__ in src:
         items.append({src_type.array_item_ctor.start}__item__{src_type.array_item_ctor.end}
             {{- if crt_type.array_item_ctor.suffix}}__item__{src_type.array_item_ctor.suffix}{{endif-}}

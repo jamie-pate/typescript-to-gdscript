@@ -14,6 +14,9 @@ interface TestInterface {
   strKey: string;
   floatKey: number;
   boolKey: boolean;
+  imported: ImportedInterface;
+  recordObject: Record<string, TestInterface>;
+  array: ImportedInterface[]
 }
 
 export interface TestInterfaceRoot {
