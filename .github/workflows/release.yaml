@@ -7,7 +7,7 @@ on:
     tags:
       - "*" # Push events to matching v*, i.e. v1.0, v20.15.10
 
-name: Cross-compile
+name: Create release and cross-compile release artifacts
 
 jobs:
   build-linux:
