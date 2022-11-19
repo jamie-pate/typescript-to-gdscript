@@ -19,6 +19,16 @@ typescript-to-gdscript [--debug-print] templatefile.gd.tmpl outputdir input1.ts 
 Reads all interfaces from input.ts files exports them to `outputdir/[InterfaceName].gd` files.
 Uses templatefile.gd.tmpl as the template.
 
+## Directives
+
+Comments can contain directives to help out with conversion
+
+* `@typescript-to-gdscript-type: int|float|String`: Forces the type of a property.
+* `@typescript-to-gdscript-skip`: This type will not be imported, and will be completely ignored by this program.
+* `@typescript-to-gdscript-gd-impl`: This type will be imported, but the gdscript file will not be generated.
+    * This is useful for interface union types that would generate one type or another based on the kind property for example.
+    * See [any-kind.ts](./test-fixtures/any-kind.ts) for an example.
+
 ## Templates
 
 Templates use the [tinytemplate syntax](https://docs.rs/tinytemplate/latest/tinytemplate/syntax/index.html). See the [example template](./gdscript-model.gd.tmpl).
@@ -66,6 +76,12 @@ func update(src: Dictionary):
     for __item__ in src.array:
         array.append(ImportedInterface.new(__item__))
 ```
+
+## Limitations
+
+Generic type parameters aren't supported well. We'd have to get into extensible sub-classes to model them properly. Use `@typescript-to-gdscript-gd-impl` to opt out here...
+
+TypeScript Enums don't work (yet)
 
 # Getting Started
 ## Set up Rust
