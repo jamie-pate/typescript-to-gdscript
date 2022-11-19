@@ -7,6 +7,12 @@ extends Reference
 {{ for import in imports -}}
 const {import.name} = preload({import.src})
 {{ endfor }}
+{{ for enum in enums -}}
+enum {enum.name} \{
+    {{ for m in enum.members }}{m.name} = {m.value}{{ if not @last }},
+    {{ endif }}{{ endfor }}
+}
+{{ endfor }}
 {{ for var_decl in vars -}}
 {{ if var_decl.comment -}}
 # {var_decl.comment}

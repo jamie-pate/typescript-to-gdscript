@@ -1,17 +1,37 @@
 // random imported external module.
 // TODO: support reading .d.ts files
-import { source } from 'common-tags';
+import { source } from "common-tags";
 
-import { int } from './int.js';
-import { TeamId } from './team-id.js';
-import { ImportedInterface, ImportedRecord1, ImportedRecord2, ImportedArray1, ImportedArray2 } from './imported-interface.js';
+import { int } from "./int.js";
+import { TeamId } from "./team-id.js";
+import {
+  ImportedInterface,
+  ImportedRecord1,
+  ImportedRecord2,
+  ImportedArray1,
+  ImportedArray2,
+} from "./imported-interface.js";
 // external imports are ignored
-import { AnyKind } from './any-kind.js';
+import { AnyKind } from "./any-kind.js";
 
 // @TODO
-// export enum SomeEnum {
-//   one, two, three
-// }
+export enum SomeEnum {
+  one,
+  two,
+  three,
+}
+
+export enum StringExprEnum {
+  one = "one",
+  two = "two",
+  three = "three",
+}
+
+export enum NumberExprEnum {
+  one = 1,
+  two = 2,
+  three = 3,
+}
 
 export interface ExportedTestInterface {
   id: TeamId;
@@ -19,7 +39,6 @@ export interface ExportedTestInterface {
   floatKey: number;
   boolKey: boolean;
 }
-
 
 interface TestInterface {
   id: TeamId;
@@ -29,16 +48,16 @@ interface TestInterface {
   optionalDate?: Date;
   nullableOptionalDate?: Date | null;
   date: Date;
-  strLit: 'abcd';
+  strLit: "abcd";
   intLit: 1;
   floatLit: 1.0;
-  strUnion: 'training' | 'full';
+  strUnion: "training" | "full";
   intfUnion: AnyKind;
   trueLit: true;
   //bigIntLit: BigInt(9007199254740991);
   imported: ImportedInterface;
   recordObject: Record<string, TestInterface>;
-  array: ImportedInterface[]
+  array: ImportedInterface[];
 }
 
 export interface TestInterfaceRoot {
@@ -54,11 +73,15 @@ export interface TestInterfaceRoot {
   importedArray2: ImportedArray2;
   importedOrNull: ImportedInterface | null;
 
+  someEnum: SomeEnum;
+  //TODO: strEnum: StringExprEnum;
+  //TODO: numEnum: NumberExprEnum;
+
   stringArray: string[];
   stringArray2: Array<string>;
   optionalArray?: int[];
   optionalRecord?: Record<string, string>;
-  // TODO: these don't work
+
   stringOrNullArray: Array<string | null>;
   stringArrayOrNull: string[] | null;
 

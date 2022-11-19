@@ -7,6 +7,8 @@ use convert_case::Casing;
 use deno_ast::parse_module;
 use deno_ast::swc::ast::BindingIdent;
 use deno_ast::swc::ast::Pat;
+use deno_ast::swc::ast::TsEnumDecl;
+use deno_ast::swc::ast::TsEnumMemberId;
 use deno_ast::swc::ast::TsLit;
 use deno_ast::SourcePos;
 use deno_ast::SourceRange;
@@ -27,6 +29,7 @@ use deno_ast::swc::{
     atoms::Atom,
     common::{comments::Comments, serializer::Type, BytePos, Span},
 };
+use model_context::ModelEnum;
 use model_context::{
     ModelContext, ModelImportContext, ModelSrcType, ModelValueCtor, ModelVarCollection,
     ModelVarInit,
@@ -45,6 +48,8 @@ use std::{
     path::{self, Path, PathBuf},
     process::exit,
 };
+
+use crate::model_context::ModelEnumMember;
 
 const TEMPLATE_NAME: &str = "gdscript-model";
 const TYPE_DIRECTIVE: &str = "@typescript-to-gdscript-type";
@@ -232,6 +237,7 @@ struct ModuleContext<'a> {
     comment_pos: Option<&'a Span>,
     resolving_local: HashSet<Id>,
     stack: Vec<String>,
+    enums: Vec<TsEnumDecl>,
     debug_print: bool,
     relative_filepath: &'a Path,
     canonical_filepath: &'a Path,
@@ -277,6 +283,7 @@ impl<'a> ModuleContext<'a> {
             } else {
                 Vec::new()
             },
+            enums: Vec::new(),
             output_type_name: "".into(),
             comment_pos: None,
             resolving_local: HashSet::new(),
@@ -385,6 +392,32 @@ fn convert(
     }
 }
 
+fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> ModelEnum {
+    let id = ts_enum.id.to_id();
+    ModelEnum {
+        name: (&*id.0).to_string(),
+        members: ts_enum
+            .members
+            .iter()
+            .enumerate()
+            .map(|(i, m)| ModelEnumMember {
+                name: match &m.id {
+                    TsEnumMemberId::Ident(ident) => (&*ident.to_id().0).to_string(),
+                    TsEnumMemberId::Str(str) => (&*str.value).to_string(),
+                },
+                value: if let Some(init_expr) = m.init.as_ref() {
+                    panic!(
+                        "Assigned enums not supported {:?} {:?}:{:?} {:#?}",
+                        init_expr, context.relative_filepath, id, context.stack
+                    );
+                } else {
+                    i.to_string()
+                },
+            })
+            .collect(),
+    }
+}
+
 fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelContext {
     let (symbol, _tag) = intf.id.to_id();
     context.output_type_name = String::from(&*symbol);
@@ -397,6 +430,13 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
         // flatten filters out None!
         .flatten()
         .collect();
+    let enums: Vec<ModelEnum> = context
+        .enums
+        .iter()
+        .map(|e| ts_enum_to_model_enum(context, e))
+        .collect();
+    context.enums.clear();
+
     ModelContext {
         class_name: String::from(&*symbol),
         canonical_src_filepath: context.canonical_filepath.to_path_buf(),
@@ -410,6 +450,7 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
             array_item_ctor: None,
         }),
         vars,
+        enums,
         imports: imports
             .into_iter()
             .map(|(name, src)| ModelImportContext { src, name })
@@ -916,6 +957,7 @@ fn resolve_type_decl(
     match_id: &Id,
 ) -> Option<TypeResolution> {
     let mut resolved_and_id: Option<(TypeResolution, Id)> = None;
+    let mut ts_enum_to_push: Option<&TsEnumDecl> = None;
     match decl {
         Decl::TsTypeAlias(alias) => {
             resolved_and_id = Some((
@@ -972,6 +1014,11 @@ fn resolve_type_decl(
                 }
             }
         }
+        Decl::TsEnum(ts_enum) => {
+            let id = ts_enum.id.to_id();
+            ts_enum_to_push = Some(&ts_enum);
+            resolved_and_id = Some((TypeResolution::from(&ts_enum.id), id));
+        }
         _ => {
             dbg!(decl);
             panic!("IDK {:#?}", context.stack);
@@ -980,6 +1027,9 @@ fn resolve_type_decl(
     // check if it matches
     if let Some((result, id)) = resolved_and_id {
         if match_id.0 == id.0 {
+            if let Some(ts_enum) = ts_enum_to_push {
+                context.enums.push(ts_enum.to_owned());
+            }
             Some(result)
         } else {
             None

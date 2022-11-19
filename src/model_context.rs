@@ -83,6 +83,18 @@ pub struct ModelValueCtor {
     pub suffix: Option<String>,
 }
 
+#[derive(Serialize, Debug)]
+pub struct ModelEnumMember {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ModelEnum {
+    pub name: String,
+    pub members: Vec<ModelEnumMember>,
+}
+
 #[derive(Serialize)]
 pub struct ModelVarInit {
     // name of the variable in the gdscript object (camel_case)
@@ -125,5 +137,6 @@ pub struct ModelContext {
     pub comment: Option<String>,
     pub src_type: Option<ModelSrcType>,
     pub imports: Vec<ModelImportContext>,
+    pub enums: Vec<ModelEnum>,
     pub vars: Vec<ModelVarInit>,
 }
