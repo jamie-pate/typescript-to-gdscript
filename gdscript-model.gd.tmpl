@@ -38,10 +38,10 @@ func update(src: { src_type.name }):
 {{- else -}}
 {{- for var_init in vars -}}
 {{- if var_init.collection }}
-    {var_init.name} = {var_init.collection.init}
 {{- if var_init.collection.is_array -}}
 {{- if var_init.optional }}
     if '{var_init.src_name}' in src:{{endif}}
+    {{ if var_init.optional}}    {{ endif }}{var_init.name} = {var_init.collection.init}
     {{ if var_init.optional}}    {{ endif }}for __item__ in src.{var_init.src_name}:
     {{ if var_init.optional}}    {{ endif }}    var __value__ = {var_init.ctor.start}__item__{var_init.ctor.end}
                                                 {{-if var_init.ctor.suffix}}__item__{var_init.ctor.suffix}{{endif-}})
@@ -51,6 +51,7 @@ func update(src: { src_type.name }):
 {{- if var_init.collection.is_dict -}}
 {{- if var_init.optional }}
     if '{var_init.src_name}' in src:{{endif}}
+    {{ if var_init.optional}}    {{ endif }}{var_init.name} = {var_init.collection.init}
     {{ if var_init.optional}}    {{ endif }}for __key__ in src.{var_init.src_name}:
     {{ if var_init.optional}}    {{ endif }}    var __value__ = src.{var_init.src_name}[__key__]
     {{ if var_init.optional}}    {{ endif }}    {var_init.name}[__key__] = {var_init.ctor.start}__value__{var_init.ctor.end}
