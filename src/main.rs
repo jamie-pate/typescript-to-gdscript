@@ -12,6 +12,7 @@ use deno_ast::swc::ast::TsEnumMemberId;
 use deno_ast::swc::ast::TsLit;
 use deno_ast::SourcePos;
 use deno_ast::SourceRange;
+use deno_ast::SourceRanged;
 use deno_ast::SourceRangedForSpanned;
 use deno_ast::{
     swc::ast::{
@@ -36,6 +37,7 @@ use model_context::{
 };
 use pathdiff::diff_paths;
 use regex::Regex;
+use substring::Substring;
 use tinytemplate::{format_unescaped, TinyTemplate};
 
 use std::collections::HashSet;
@@ -55,6 +57,7 @@ const TEMPLATE_NAME: &str = "gdscript-model";
 const TYPE_DIRECTIVE: &str = "@typescript-to-gdscript-type";
 const SKIP_DIRECTIVE: &str = "@typescript-to-gdscript-skip";
 const GD_IMPL_DIRECTIVE: &str = "@typescript-to-gdscript-gd-impl";
+const TERM_WIDTH: usize = 180;
 pub mod model_context;
 
 fn main() {
@@ -234,7 +237,7 @@ struct ModuleRegexes {
 }
 struct ModuleContext<'a> {
     regexes: ModuleRegexes,
-    comment_pos: Option<&'a Span>,
+    pos: Vec<Span>,
     resolving_local: HashSet<Id>,
     stack: Vec<String>,
     enums: Vec<TsEnumDecl>,
@@ -285,7 +288,7 @@ impl<'a> ModuleContext<'a> {
             },
             enums: Vec::new(),
             output_type_name: "".into(),
-            comment_pos: None,
+            pos: Vec::new(),
             resolving_local: HashSet::new(),
             debug_print,
             relative_filepath,
@@ -311,6 +314,45 @@ impl<'a> ModuleContext<'a> {
             Some(&self.regexes),
             Some(&self.stack),
         )
+    }
+
+    fn get_span_text(&'a self, span: &Span) -> &'a str {
+        self.parsed_source.text_info().range_text(&span.range())
+    }
+
+    fn get_text(&'a self, limit: usize) -> &'a str {
+        let result = self.get_span_text(self.pos.last().unwrap());
+        if limit > 0 && result.len() > limit {
+            result.substring(0, limit)
+        } else {
+            result
+        }
+    }
+
+    fn get_span_info(&self, span: &Span) -> String {
+        let result = format!(
+            "{}:{}\n{}",
+            &self.relative_filepath.to_string_lossy(),
+            &span
+                .range()
+                .start_line_fast(&self.parsed_source.text_info()),
+            self.get_span_text(span)
+        );
+        if self.debug_print {
+            let stack = self
+                .stack
+                .clone()
+                .into_iter()
+                .collect::<Vec<String>>()
+                .join("\n\t");
+            format!("{}\nstack:\n\t{}", result, stack)
+        } else {
+            result
+        }
+    }
+
+    fn get_info(&self) -> String {
+        self.get_span_info(self.pos.last().unwrap())
     }
 }
 
@@ -344,36 +386,36 @@ fn convert(
             ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
                 let decl = &export.decl;
                 if let Decl::TsInterface(intf) = decl {
-                    context.comment_pos = Some(&export.span);
-                    dbg_comment_pos(&context, "convert ExportDecl");
+                    context.pos.push(export.span.to_owned());
+                    dbg_pos(&context, "convert ExportDecl");
                     if !should_skip(&context) {
                         context.stack.push(format!(
-                            "{:?}:{:?} {}",
+                            "{:?}:{:?} {:?}",
                             filename,
                             intf.id.to_id(),
-                            get_text(&context)
+                            context.get_text(TERM_WIDTH)
                         ));
                         models.push(get_intf_model(&mut context, &intf));
                         context.stack.pop();
                     }
-                    context.comment_pos = None;
+                    context.pos.pop();
                 }
             }
             ModuleItem::Stmt(Stmt::Decl(decl)) => {
                 if let Decl::TsInterface(intf) = decl {
-                    context.comment_pos = Some(&intf.span);
-                    dbg_comment_pos(&context, "convert Decl");
+                    context.pos.push(intf.span.to_owned());
+                    dbg_pos(&context, "convert Decl");
                     if !should_skip(&context) {
                         context.stack.push(format!(
                             "{:?}:{:?}, {}",
                             filename,
                             intf.id.to_id(),
-                            get_text(&context)
+                            context.get_text(TERM_WIDTH)
                         ));
                         models.push(get_intf_model(&mut context, &intf));
                         context.stack.pop();
                     }
-                    context.comment_pos = None;
+                    context.pos.pop();
                 }
             }
             _ => {}
@@ -407,8 +449,10 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
                 },
                 value: if let Some(init_expr) = m.init.as_ref() {
                     panic!(
-                        "Assigned enums not supported {:?} {:?}:{:?} {:#?}",
-                        init_expr, context.relative_filepath, id, context.stack
+                        "Assigned enums not supported {:?} {:?}\n{}",
+                        id,
+                        init_expr,
+                        context.get_info()
                     );
                 } else {
                     i.to_string()
@@ -421,12 +465,12 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
 fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelContext {
     let (symbol, _tag) = intf.id.to_id();
     context.output_type_name = String::from(&*symbol);
-    let mut imports: HashMap<String, String> = HashMap::new();
+    let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let vars = intf
         .body
         .body
         .iter()
-        .map(|e| get_intf_model_var(context, &mut imports, e))
+        .map(|e| get_intf_model_var(context, &mut import_map, e))
         // flatten filters out None!
         .flatten()
         .collect();
@@ -436,6 +480,16 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
         .map(|e| ts_enum_to_model_enum(context, e))
         .collect();
     context.enums.clear();
+    let mut imports: Vec<_> = import_map.into_values().collect();
+    imports.sort_by(|a, b| {
+        if a.gd_impl == b.gd_impl {
+            a.name.cmp(&b.name)
+        } else {
+            // sort by whether it's a generated class or not
+            // place gd_impl at the top
+            b.gd_impl.cmp(&a.gd_impl)
+        }
+    });
 
     ModelContext {
         class_name: String::from(&*symbol),
@@ -451,10 +505,7 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
         }),
         vars,
         enums,
-        imports: imports
-            .into_iter()
-            .map(|(name, src)| ModelImportContext { src, name })
-            .collect(),
+        imports,
     }
 }
 
@@ -464,6 +515,7 @@ struct TypeResolution {
     ctor: Option<ModelValueCtor>,
     collection: Option<ModelVarCollection>,
     comment: Option<String>,
+    gd_impl: bool,
 }
 
 impl From<&str> for TypeResolution {
@@ -473,6 +525,7 @@ impl From<&str> for TypeResolution {
             ctor: None,
             collection: None,
             comment: None,
+            gd_impl: false,
         }
     }
 }
@@ -485,13 +538,14 @@ impl From<&Ident> for TypeResolution {
             ctor: None,
             collection: None,
             comment: None,
+            gd_impl: false,
         }
     }
 }
 
 fn resolve_type_ref(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, String>,
+    imports: &mut HashMap<String, ModelImportContext>,
     type_ref: &TsTypeRef,
 ) -> TypeResolution {
     if let Some(ident) = &type_ref.type_name.as_ident() {
@@ -515,8 +569,9 @@ fn resolve_type_ref(
         resolved_type
     } else {
         panic!(
-            "IDK what to do with {:#?} {:#?}",
-            type_ref.type_name, &context.stack
+            "IDK what to do with {:#?}\n{}",
+            type_ref.type_name,
+            context.get_info()
         );
     }
 }
@@ -524,14 +579,14 @@ fn resolve_type_ref(
 // type name, ctor, collection, comment
 fn resolve_type(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, String>,
+    imports: &mut HashMap<String, ModelImportContext>,
     ts_type: &TsType,
 ) -> TypeResolution {
     match (ts_type) {
         TsType::TsTypeRef(type_ref) => {
             context
                 .stack
-                .push(format!("resolve type_ref {:?}", type_ref));
+                .push(format!("resolve type_ref {:?}", type_ref.type_name));
             let result = resolve_type_ref(context, imports, &type_ref);
             context.stack.pop();
             result
@@ -563,8 +618,9 @@ fn resolve_type(
                 // used internally, probably not useful though
                 TsKeywordTypeKind::TsNullKeyword => TypeResolution::from("null"),
                 kind => panic!(
-                    "IDK what to do with keyword type {:#?} {:#?}",
-                    kind, context.stack
+                    "IDK what to do with keyword type {:#?}\n{}",
+                    kind,
+                    context.get_info()
                 ),
             };
             update_resolve_from_comments(context, &mut result);
@@ -574,13 +630,13 @@ fn resolve_type(
         TsType::TsUnionOrIntersectionType(ui_type) => {
             context
                 .stack
-                .push(format!("resolve union_or_intersection_type {:?}", ui_type));
+                .push("resolve union_or_intersection_type".into());
             let result = match ui_type {
                 TsUnionOrIntersectionType::TsUnionType(union_type) => {
                     if (union_type.types.len() < 2) {
                         panic!(
-                            "At least two types required in a union type {:#?}",
-                            context.stack
+                            "At least two types required in a union type\n{}",
+                            context.get_info()
                         );
                     }
                     let mut it = union_type.types.iter();
@@ -589,7 +645,10 @@ fn resolve_type(
                     let mut a_type = resolve_type(context, imports, &a);
                     let mut b_type = resolve_type(context, imports, &b);
                     let b_is_null = b_type.name == "null";
-                    context.stack.push(format!("resolve union_type {:?}", a));
+                    context.stack.push(format!(
+                        "resolve union_type ({:?} types)",
+                        union_type.types.len()
+                    ));
                     let result = if union_type.types.len() == 2 && b_is_null {
                         // Add a suffix to check for null and avoid the constructor if the value is null.
                         // NOTE: We only have to do this if resolve_type created a constructor
@@ -604,33 +663,33 @@ fn resolve_type(
                             .iter()
                             .map(|t| resolve_type(context, imports, &t))
                             .collect();
+                        context.stack.push(format!(
+                            "union_types: {:?}",
+                            all_types
+                                .iter()
+                                .map(|tr| &tr.name)
+                                .collect::<Vec<&String>>()
+                        ));
                         if !all_types.iter().all(|rt| rt.name == a_type.name) {
                             if have_directive(context, GD_IMPL_DIRECTIVE) {
                                 a_type = TypeResolution::from("");
                                 a_type.ctor = Some(ModelValueCtor::new(&a_type.name));
+                                a_type.gd_impl = true;
                             } else {
                                 let all_types = all_types
                                     .into_iter()
                                     .map(|tr| tr.name)
                                     .collect::<Vec<String>>();
-                                let pos = context.comment_pos.unwrap();
+                                let pos = context.pos.last().unwrap();
                                 if context.debug_print {
-                                    eprintln!(
-                                        "COMMENTS: {:#?}",
-                                        context
-                                            .parsed_source
-                                            .comments()
-                                            .as_single_threaded()
-                                            .get_leading(pos.lo)
-                                    );
+                                    dbg_pos(context, "Union");
                                 }
-                                let pos_src =
-                                    context.parsed_source.text_info().range_text(&pos.range());
                                 panic!("Unsupported type, union types must all have the same godot type unless \
-                                    you supply {} directive. {:?}\n{:#?}\n${:#?}",
+                                    you supply {} directive. {:?}\n{:#?}",
                                     GD_IMPL_DIRECTIVE,
-                                    all_types
-                                    , context.stack, pos_src);
+                                    all_types,
+                                    context.get_info()
+                                );
                             }
                         }
                         // TODO: lousy hack, add a property to denote this?
@@ -654,13 +713,14 @@ fn resolve_type(
                                     .join(" | "),
                             );
                         }
+                        context.stack.pop();
                         a_type
                     };
                     context.stack.pop();
                     result
                 }
                 TsUnionOrIntersectionType::TsIntersectionType(_) => {
-                    panic!("Intersection types are not allowed {:#?}", context.stack);
+                    panic!("Intersection types are not allowed\n{}", context.get_info());
                 }
             };
             context.stack.pop();
@@ -701,23 +761,25 @@ fn resolve_type(
                     result
                 }
                 _ => panic!(
-                    "IDK what to do with this type {:#?} {:#?}",
-                    ts_type, context.stack
+                    "IDK what to do with this type {:#?}\n{}",
+                    ts_type,
+                    context.get_info()
                 ),
             };
             context.stack.pop();
             result
         }
         _ => panic!(
-            "IDK what to do with this type {:#?} {:#?}",
-            ts_type, context.stack
+            "IDK what to do with this type {:#?}\n{}",
+            ts_type,
+            context.get_info()
         ),
     }
 }
 
 fn get_intf_model_var(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, String>,
+    imports: &mut HashMap<String, ModelImportContext>,
     type_element: &TsTypeElement,
 ) -> Option<ModelVarInit> {
     if let TsTypeElement::TsPropertySignature(prop_sig) = type_element {
@@ -730,15 +792,16 @@ fn get_intf_model_var(
         if context.debug_print {
             dbg!(&src_name);
         }
-        let type_ann = prop_sig
-            .type_ann
-            .as_ref()
-            .expect(&format!("IDK what to do with this type {:#?}", prop_sig));
+        let type_ann = prop_sig.type_ann.as_ref().expect(&format!(
+            "IDK what to do with this type {:#?}\n{}",
+            prop_sig,
+            context.get_info()
+        ));
         let empty = String::from("");
         context.stack.push(format!(
             "get_intf_model_var {:?} {:?}",
             &src_name.as_ref().unwrap_or(&empty),
-            get_text(context)
+            context.get_text(TERM_WIDTH)
         ));
         let resolved = resolve_type(context, imports, &*type_ann.type_ann);
         context.stack.pop();
@@ -770,7 +833,7 @@ fn get_intf_model_var(
 
 fn resolve_local_specifier_type(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, String>,
+    imports: &mut HashMap<String, ModelImportContext>,
     type_ref: &TsTypeRef,
     id: &Id,
 ) -> TypeResolution {
@@ -783,11 +846,15 @@ fn resolve_local_specifier_type(
         for node in context.parsed_source.module().body.iter() {
             match node {
                 ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
+                    context.pos.push(export.span.to_owned());
                     let decl = &export.decl;
                     let resolved = resolve_type_decl(context, imports, &decl, &id);
                     if let Some(r) = resolved {
                         add_import(context, imports, &r);
                         decl_resolved = Some(r);
+                    }
+                    context.pos.pop();
+                    if decl_resolved.is_some() {
                         break;
                     }
                 }
@@ -812,8 +879,11 @@ fn resolve_local_specifier_type(
     let sstr = &*id.0;
     let result = decl_resolved.unwrap_or_else(|| match (sstr) {
         "Date" => {
-            let mut result = TypeResolution::from("String");
-            result.ctor = Some(ModelValueCtor::new("ISO8601Date"));
+            // gd_impl type Iso8601Date.gd must be provided
+            // TODO: create reference impl?
+            let mut result = TypeResolution::from("Iso8601Date");
+            result.ctor = Some(ModelValueCtor::new(&result.name));
+            result.gd_impl = true;
             result
         }
         "Record" => {
@@ -848,10 +918,15 @@ fn resolve_local_specifier_type(
             });
             result
         }
-        _ => panic!(
-            "Unable to resolve type {:?} from {:?}, is it a built in type or generic type parameter? {:#?}...{:#?}",
-            &id, context.relative_filepath, type_ref, context.stack
-        ),
+        _ => {
+            if context.debug_print {
+                dbg!(type_ref);
+            }
+            panic!(
+                "Unable to resolve type {:?} from {:?}, is it a built in type or generic type parameter?\n{}",
+                &id, context.relative_filepath, context.get_info()
+                )
+            },
     });
     context.stack.pop();
     result
@@ -878,20 +953,23 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
             context.stack.push(String::from("found parsed module"));
             let mut import_specifiers: HashMap<Id, PathBuf> = HashMap::new();
             let module = parsed_source.module();
-            let mut imported_imports: HashMap<String, String> = HashMap::new();
+            let mut imported_imports: HashMap<String, ModelImportContext> = HashMap::new();
             let mut import_context =
                 context.inherit(relative_filepath.as_path(), module_path, parsed_source);
             extract_import_specifiers(&mut import_context, module);
             for node in module.body.iter() {
                 if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
-                    import_context.comment_pos = Some(&export.span);
+                    import_context.pos.push(export.span.to_owned());
                     import_context.stack.push(format!(
-                        "imported export decl {:?}:{:?} {}",
+                        "imported export decl {:?} {}",
                         relative_filepath,
-                        export,
-                        get_text(&import_context)
+                        import_context
+                            .get_text(TERM_WIDTH)
+                            .chars()
+                            .take(180)
+                            .collect::<String>()
                     ));
-                    dbg_comment_pos(&import_context, "import ExportDecl");
+                    dbg_pos(&import_context, "import ExportDecl");
 
                     if !should_skip(&context) {
                         if let Some(r) = resolve_type_decl(
@@ -903,7 +981,7 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                             result = Some(r);
                         }
                     }
-                    import_context.comment_pos = None;
+                    import_context.pos.pop();
                     import_context.stack.pop();
                 }
                 if result.is_some() {
@@ -913,8 +991,10 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
 
             if result.is_none() {
                 panic!(
-                    "no type found for {:?} in {:?} imported modules {:#?}",
-                    id, &relative_filepath, context.stack
+                    "no type found for {:?} in {:?} imported modules\n{}",
+                    id,
+                    &relative_filepath,
+                    context.get_info()
                 );
             }
             context.stack.pop();
@@ -951,7 +1031,7 @@ fn extract_import_specifiers(context: &mut ModuleContext, module: &Module) {
 
 fn resolve_type_decl(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, String>,
+    imports: &mut HashMap<String, ModelImportContext>,
     decl: &Decl,
     // if this id is supplied, only match declarations for this id's symbol
     match_id: &Id,
@@ -960,6 +1040,8 @@ fn resolve_type_decl(
     let mut ts_enum_to_push: Option<&TsEnumDecl> = None;
     match decl {
         Decl::TsTypeAlias(alias) => {
+            context.pos.push(alias.span.to_owned());
+            context.stack.push("resolve_type_decl:TsTypeAlias".into());
             resolved_and_id = Some((
                 resolve_type(context, imports, &alias.type_ann),
                 alias.id.to_id().clone(),
@@ -967,22 +1049,27 @@ fn resolve_type_decl(
             if let Some((r, _)) = &resolved_and_id {
                 add_import(context, imports, &r);
             }
+            context.stack.pop();
+            context.pos.pop();
         }
         Decl::TsInterface(intf) => {
+            context.pos.push(intf.span.to_owned());
             let id = intf.id.to_id();
             let mut tr = TypeResolution::from(&intf.id);
             tr.ctor = Some(ModelValueCtor::new(&tr.name));
             resolved_and_id = Some((tr, id.clone()));
+            context.pos.pop();
         }
         Decl::Class(cls_decl) => {
             let id = cls_decl.ident.to_id();
             if match_id.0 == id.0 {
                 panic!(
                     "\
-                    Conversion of class declarations is unsupported.\n\
+                    Conversion of class declarations {:?} is unsupported.\n\
                     Create an interface and have the class implement that interface instead\n\
-                    {:#?}",
-                    context.stack
+                    {}",
+                    id.0,
+                    context.get_info()
                 );
             } else {
                 if context.debug_print {
@@ -1005,8 +1092,8 @@ fn resolve_type_decl(
                     "\
                     Conversion of function declarations is unsupported.\n\
                     Create an interface and have the class implement that interface instead\n\
-                    {:#?}",
-                    context.stack
+                    {}",
+                    context.get_info()
                 );
             } else {
                 if context.debug_print {
@@ -1021,7 +1108,7 @@ fn resolve_type_decl(
         }
         _ => {
             dbg!(decl);
-            panic!("IDK {:#?}", context.stack);
+            panic!("IDK {}", context.get_info());
         }
     }
     // check if it matches
@@ -1046,7 +1133,7 @@ fn should_skip(context: &ModuleContext) -> bool {
                 eprintln!(
                     "Skipping due to {} directive: {:?}",
                     GD_IMPL_DIRECTIVE,
-                    get_text(context)
+                    context.get_text(TERM_WIDTH)
                 );
             }
             return true;
@@ -1056,31 +1143,30 @@ fn should_skip(context: &ModuleContext) -> bool {
 }
 
 fn have_directive(context: &ModuleContext, directive: &str) -> bool {
-    let span = context.comment_pos.unwrap();
     let c = context.parsed_source.comments().as_single_threaded();
-    if let Some(comments) = c.get_leading(span.lo) {
-        for c in comments.iter() {
-            if (context.debug_print) {
-                eprintln!("Checking comment for {}: {:?}", directive, c.text);
-            }
-            if c.text.contains(directive) {
-                return true;
+    for span in context.pos.iter().rev() {
+        if let Some(comments) = c.get_leading(span.lo) {
+            for c in comments.iter() {
+                if (context.debug_print) {
+                    eprintln!(
+                        "Checking comment for {}: {:?} on {}",
+                        directive,
+                        c.text,
+                        context.get_span_text(span)
+                    );
+                }
+                if c.text.contains(directive) {
+                    return true;
+                }
             }
         }
     }
     return false;
 }
 
-fn get_text<'a>(context: &'a ModuleContext) -> &'a str {
-    context
-        .parsed_source
-        .text_info()
-        .range_text(&context.comment_pos.unwrap().range())
-}
-
 fn update_resolve_from_comments(context: &ModuleContext, result: &mut TypeResolution) {
     let c = context.parsed_source.comments().as_single_threaded();
-    let span = context.comment_pos.unwrap();
+    let span = context.pos.last().unwrap();
     if let Some(comments) = c.get_leading(span.lo) {
         for c in comments.iter() {
             if let Some(gd_type) = context
@@ -1095,9 +1181,9 @@ fn update_resolve_from_comments(context: &ModuleContext, result: &mut TypeResolu
     }
 }
 
-fn dbg_comment_pos(context: &ModuleContext, comment: &str) {
+fn dbg_pos(context: &ModuleContext, comment: &str) {
     if context.debug_print {
-        let pos = context.comment_pos.unwrap();
+        let pos = context.pos.last().unwrap();
         let pos_src = context.parsed_source.text_info().range_text(&pos.range());
         eprintln!(
             "Setting comment pos {},  {:?}:\n{:#?}\n{:#?}",
@@ -1117,11 +1203,22 @@ fn dbg_comment_pos(context: &ModuleContext, comment: &str) {
     }
 }
 
-fn add_import(context: &ModuleContext, imports: &mut HashMap<String, String>, r: &TypeResolution) {
+fn add_import(
+    context: &ModuleContext,
+    imports: &mut HashMap<String, ModelImportContext>,
+    r: &TypeResolution,
+) {
     // assume it's an imported type if there's a constructor
     if let Some(ctor) = &r.ctor {
         if context.output_type_name != r.name && !ctor.builtin {
-            imports.insert(ctor.name.to_string(), format!("\"./{}.gd\"", &r.name));
+            imports.insert(
+                ctor.name.to_string(),
+                ModelImportContext {
+                    name: ctor.name.clone(),
+                    src: format!("{}.gd", &r.name),
+                    gd_impl: r.gd_impl,
+                },
+            );
         }
     }
 }

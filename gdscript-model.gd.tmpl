@@ -5,7 +5,7 @@ extends Reference
 # {comment}
 {{ endif -}}
 {{ for import in imports -}}
-const {import.name} = preload({import.src})
+const {import.name} = preload("{{ if import.gd_impl }}.{{ endif }}./{import.src}")
 {{ endfor }}
 {{ for enum in enums -}}
 enum {enum.name} \{

@@ -6,6 +6,7 @@ use serde::Serialize;
 pub struct ModelImportContext {
     pub name: String,
     pub src: String,
+    pub gd_impl: bool,
 }
 
 // Extra template data that's required if the variable is an array or dictionary
