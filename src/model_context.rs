@@ -9,7 +9,7 @@ pub struct ModelImportContext {
 }
 
 // Extra template data that's required if the variable is an array or dictionary
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ModelVarCollection {
     // Initial value (empty array, dict, PoolStringArray, etc)
     pub init: String,
@@ -28,16 +28,17 @@ lazy_static! {
 
 impl ModelValueCtor {
     pub fn new(name: &str) -> Self {
-        ModelValueCtor::new_(name, false, true)
+        ModelValueCtor::new_(name, false)
     }
     pub fn nullable(name: &str) -> Self {
-        ModelValueCtor::new_(name, true, true)
+        ModelValueCtor::new_(name, true)
     }
     // todo: lazy static?
     pub fn empty() -> Self {
-        ModelValueCtor::new_("", false, false)
+        ModelValueCtor::new_("", false)
     }
-    fn new_(name: &str, nullable: bool, parens: bool) -> Self {
+    fn new_(name: &str, nullable: bool) -> Self {
+        let parens = name != "";
         let builtin = BUILTINS.contains(name);
         let new_str = if !builtin { ".new" } else { "" };
         let (lparen_str, rparen_str) = if parens { ("(", ")") } else { ("", "") };
@@ -63,6 +64,10 @@ impl ModelValueCtor {
         }
         self.end = format!("{} if ", self.end);
         self.suffix = Some(" != null else null".to_string())
+    }
+
+    pub fn rename(&self, name: &str) -> Self {
+        ModelValueCtor::new_(name, self.suffix.is_some())
     }
 }
 // usage: `{ctor.start}__value__{ctor.end} in the template
@@ -94,6 +99,8 @@ pub struct ModelVarInit {
     pub ctor: ModelValueCtor,
     // maybe a collection
     pub collection: Option<ModelVarCollection>,
+    // if the whole thing is optional
+    pub optional: bool,
 }
 
 #[derive(Serialize)]

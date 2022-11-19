@@ -1,6 +1,17 @@
+// random imported external module.
+// TODO: support reading .d.ts files
+import { source } from 'common-tags';
+
 import { int } from './int.js';
 import { TeamId } from './team-id.js';
 import { ImportedInterface, ImportedRecord1, ImportedRecord2, ImportedArray1, ImportedArray2 } from './imported-interface.js';
+// external imports are ignored
+import { AnyKind } from './any-kind.js';
+
+// @TODO
+// export enum SomeEnum {
+//   one, two, three
+// }
 
 export interface ExportedTestInterface {
   id: TeamId;
@@ -9,11 +20,22 @@ export interface ExportedTestInterface {
   boolKey: boolean;
 }
 
+
 interface TestInterface {
   id: TeamId;
   strKey: string;
   floatKey: number;
   boolKey: boolean;
+  optionalDate?: Date;
+  nullableOptionalDate?: Date | null;
+  date: Date;
+  strLit: 'abcd';
+  intLit: 1;
+  floatLit: 1.0;
+  strUnion: 'training' | 'full';
+  intfUnion: AnyKind;
+  trueLit: true;
+  //bigIntLit: BigInt(9007199254740991);
   imported: ImportedInterface;
   recordObject: Record<string, TestInterface>;
   array: ImportedInterface[]
@@ -34,6 +56,8 @@ export interface TestInterfaceRoot {
 
   stringArray: string[];
   stringArray2: Array<string>;
+  optionalArray?: int[];
+  optionalRecord?: Record<string, string>;
   // TODO: these don't work
   stringOrNullArray: Array<string | null>;
   stringArrayOrNull: string[] | null;
@@ -43,4 +67,12 @@ export interface TestInterfaceRoot {
   recordObject: Record<string, TestInterface>;
   orNull: string | null;
   objOrNull: TestInterface | null;
+}
+
+/**
+ * not supported, opt out with @typescript-to-gdscript-skip
+ */
+// @typescript-to-gdscript-skip
+export interface GenericExtend<T extends TestInterface> {
+  arrayOfExtendsTestInterface: T[];
 }
