@@ -17,6 +17,7 @@ pub struct ModelVarCollection {
     pub is_array: bool,
     pub is_dict: bool,
 }
+
 lazy_static! {
     static ref BUILTINS: HashSet<&'static str> = {
         let mut b = HashSet::new();
@@ -27,20 +28,18 @@ lazy_static! {
     };
 }
 
+pub fn is_builtin(name: &str) -> bool {
+    BUILTINS.contains(name)
+}
+
 impl ModelValueCtor {
-    pub fn new(name: &str) -> Self {
-        ModelValueCtor::new_(name, false)
+    pub fn empty(nullable: bool) -> Self {
+        ModelValueCtor::new("", nullable)
     }
-    pub fn nullable(name: &str) -> Self {
-        ModelValueCtor::new_(name, true)
-    }
-    // todo: lazy static?
-    pub fn empty() -> Self {
-        ModelValueCtor::new_("", false)
-    }
-    fn new_(name: &str, nullable: bool) -> Self {
+    pub fn new(name: &str, nullable: bool) -> Self {
         let parens = name != "";
-        let builtin = BUILTINS.contains(name);
+        let builtin = is_builtin(name);
+        // TODO: add other builtin conversions from json here
         let new_str = if !builtin { ".new" } else { "" };
         let (lparen_str, rparen_str) = if parens { ("(", ")") } else { ("", "") };
         ModelValueCtor {
@@ -52,25 +51,15 @@ impl ModelValueCtor {
             } else {
                 format!("{} if ", rparen_str)
             },
-            suffix: if !nullable {
-                None
-            } else {
+            suffix: if nullable {
                 Some(" != null else null".to_string())
+            } else {
+                None
             },
         }
     }
-    pub fn set_nullable(&mut self) {
-        if self.suffix.is_some() {
-            panic!("Don't want to overwrite ctor suffix{:#?}", &self);
-        }
-        self.end = format!("{} if ", self.end);
-        self.suffix = Some(" != null else null".to_string())
-    }
-
-    pub fn rename(&self, name: &str) -> Self {
-        ModelValueCtor::new_(name, self.suffix.is_some())
-    }
 }
+
 // usage: `{ctor.start}__value__{ctor.end} in the template
 #[derive(Serialize, Debug)]
 pub struct ModelValueCtor {
@@ -81,6 +70,37 @@ pub struct ModelValueCtor {
     // suffix such for cases where we need to put the input value in twice
     // usage: `{ctor.start}__value__{ctor.end}{{if ctor.suffix}}__value__{ctor.suffix}{{endif}}
     // for cases like `T.new(__value__) if __value != null else null`
+    pub suffix: Option<String>,
+}
+
+impl ModelValueForJson {
+    pub fn empty(nullable: bool) -> Self {
+        ModelValueForJson::new("", nullable)
+    }
+    pub fn new(name: &str, nullable: bool) -> Self {
+        let parens = name != "";
+        let builtin = is_builtin(name);
+        // TODO: add other builtin 'for_json' behaviors here
+        let for_json_str = if !builtin { ".for_json()" } else { "" }.to_string();
+        ModelValueForJson {
+            name: name.to_string(),
+            builtin,
+            start: String::from(""),
+            end: if nullable { format!("{} if ", for_json_str) } else { for_json_str },
+            suffix: if nullable {
+                Some(" != null else null".to_string())
+            } else {
+                None
+            },
+        }
+    }
+}
+#[derive(Serialize, Debug)]
+pub struct ModelValueForJson {
+    pub name: String,
+    pub builtin: bool,
+    pub start: String,
+    pub end: String,
     pub suffix: Option<String>,
 }
 
@@ -110,6 +130,8 @@ pub struct ModelVarInit {
     pub src_name: String,
     // Constructor expression.
     pub ctor: ModelValueCtor,
+    // Conversion to json
+    pub for_json: ModelValueForJson,
     // maybe a collection
     pub collection: Option<ModelVarCollection>,
     // if the whole thing is optional
@@ -120,9 +142,6 @@ pub struct ModelVarInit {
 pub struct ModelSrcType {
     pub name: String,
     pub init: Option<String>,
-    // if this is present then the source data is an array type.
-    // this ctor expression will be used to create each item.
-    pub array_item_ctor: Option<ModelValueCtor>,
 }
 
 #[derive(Serialize)]

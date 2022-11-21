@@ -31,6 +31,8 @@ use deno_ast::swc::{
     common::{comments::Comments, serializer::Type, BytePos, Span},
 };
 use model_context::ModelEnum;
+use model_context::ModelValueForJson;
+use model_context::is_builtin;
 use model_context::{
     ModelContext, ModelImportContext, ModelSrcType, ModelValueCtor, ModelVarCollection,
     ModelVarInit,
@@ -501,7 +503,6 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
         src_type: Some(ModelSrcType {
             name: "Dictionary".to_string(),
             init: Some("{}".to_string()),
-            array_item_ctor: None,
         }),
         vars,
         enums,
@@ -512,30 +513,38 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
 #[derive(Debug)]
 struct TypeResolution {
     name: String,
-    ctor: Option<ModelValueCtor>,
+    type_name: Option<String>,
+    nullable: bool,
     collection: Option<ModelVarCollection>,
     comment: Option<String>,
     gd_impl: bool,
 }
 
-impl From<&str> for TypeResolution {
-    fn from(name: &str) -> Self {
+impl TypeResolution {
+    fn new(name: &str) -> Self {
         TypeResolution {
             name: String::from(name),
-            ctor: None,
+            type_name: None,
+            nullable: false,
             collection: None,
             comment: None,
             gd_impl: false,
         }
     }
+
+    fn gd_impl() -> Self {
+        let mut result = TypeResolution::new("");
+        result.gd_impl = true;
+        result
+    }
 }
 
-impl From<&Ident> for TypeResolution {
-    fn from(ident: &Ident) -> Self {
-        let name: &str = &*ident.to_id().0;
+impl From<Ident> for TypeResolution {
+    fn from(ident: Ident) -> Self {
         TypeResolution {
-            name: String::from(name),
-            ctor: None,
+            name: String::from(&*ident.to_id().0),
+            type_name: None,
+            nullable: false,
             collection: None,
             comment: None,
             gd_impl: false,
@@ -558,10 +567,11 @@ fn resolve_type_ref(
         };
         // Special case where we want to exclude the contents of this part of the tree
         // for example we encountered a GD_IMPL_DIRECTIVE on an interface union
-        if resolved_type.name == "" {
+        if resolved_type.gd_impl {
+            resolved_type.gd_impl = false;
             resolved_type.name = (&*id.0).to_string();
-            if let Some(ctor) = resolved_type.ctor {
-                resolved_type.ctor = Some(ctor.rename(&resolved_type.name));
+            if resolved_type.type_name.is_some() {
+                resolved_type.type_name = Some(resolved_type.name.clone());
             }
         }
         add_import(context, imports, &resolved_type);
@@ -610,13 +620,13 @@ fn resolve_type(
                 .stack
                 .push(format!("resolve keyword_type {:?}", kw_type));
             let mut result = match (kw_type.kind) {
-                TsKeywordTypeKind::TsNumberKeyword => TypeResolution::from("float"),
+                TsKeywordTypeKind::TsNumberKeyword => TypeResolution::new("float"),
                 // Godot 3 uses 64 bit ints in 64 bit builds but probably we shouldn't use this type anyways, idk
-                TsKeywordTypeKind::TsBigIntKeyword => TypeResolution::from("int"),
-                TsKeywordTypeKind::TsBooleanKeyword => TypeResolution::from("bool"),
-                TsKeywordTypeKind::TsStringKeyword => TypeResolution::from("String"),
+                TsKeywordTypeKind::TsBigIntKeyword => TypeResolution::new("int"),
+                TsKeywordTypeKind::TsBooleanKeyword => TypeResolution::new("bool"),
+                TsKeywordTypeKind::TsStringKeyword => TypeResolution::new("String"),
                 // used internally, probably not useful though
-                TsKeywordTypeKind::TsNullKeyword => TypeResolution::from("null"),
+                TsKeywordTypeKind::TsNullKeyword => TypeResolution::new("null"),
                 kind => panic!(
                     "IDK what to do with keyword type {:#?}\n{}",
                     kind,
@@ -652,9 +662,7 @@ fn resolve_type(
                     let result = if union_type.types.len() == 2 && b_is_null {
                         // Add a suffix to check for null and avoid the constructor if the value is null.
                         // NOTE: We only have to do this if resolve_type created a constructor
-                        if let Some(ctor) = a_type.ctor.as_mut() {
-                            ctor.set_nullable();
-                        }
+                        a_type.nullable = true;
                         a_type.comment = Some(format!("{} | null", &a_type.name.clone()));
                         a_type
                     } else {
@@ -672,8 +680,8 @@ fn resolve_type(
                         ));
                         if !all_types.iter().all(|rt| rt.name == a_type.name) {
                             if have_directive(context, GD_IMPL_DIRECTIVE) {
-                                a_type = TypeResolution::from("");
-                                a_type.ctor = Some(ModelValueCtor::new(&a_type.name));
+                                a_type = TypeResolution::new("");
+                                a_type.type_name = Some(a_type.name.clone());
                                 a_type.gd_impl = true;
                             } else {
                                 let all_types = all_types
@@ -738,25 +746,25 @@ fn resolve_type(
                         number.value.to_string()
                     };
                     let mut result = if s.contains(".") {
-                        TypeResolution::from("float")
+                        TypeResolution::new("float")
                     } else {
-                        TypeResolution::from("int")
+                        TypeResolution::new("int")
                     };
                     result.comment = Some(format!("Literally {}", s));
                     result
                 }
                 TsLit::Str(str) => {
-                    let mut result = TypeResolution::from("String");
+                    let mut result = TypeResolution::new("String");
                     result.comment = Some(format!("Literally \"{}\"", str.value));
                     result
                 }
                 TsLit::Bool(bool) => {
-                    let mut result = TypeResolution::from("bool");
+                    let mut result = TypeResolution::new("bool");
                     result.comment = Some(format!("Literally {}", bool.value));
                     result
                 }
                 TsLit::BigInt(big_int) => {
-                    let mut result = TypeResolution::from("int");
+                    let mut result = TypeResolution::new("int");
                     result.comment = Some(format!("Literally {}", big_int.value));
                     result
                 }
@@ -806,10 +814,13 @@ fn get_intf_model_var(
         let resolved = resolve_type(context, imports, &*type_ann.type_ann);
         context.stack.pop();
         if let Some(src_name) = src_name {
-            let mut ctor = if let Some(ctor) = resolved.ctor {
-                ctor
+            let (ctor, for_json) = if let Some(type_name) = resolved.type_name {
+                (
+                    ModelValueCtor::new(&type_name, resolved.nullable),
+                    ModelValueForJson::new(&type_name, resolved.nullable),
+                )
             } else {
-                ModelValueCtor::empty()
+                (ModelValueCtor::empty(resolved.nullable), ModelValueForJson::empty(resolved.nullable))
             };
 
             //  = prop_sig.type_ann?.type_ann;
@@ -820,6 +831,7 @@ fn get_intf_model_var(
                 decl_init: None,
                 src_name,
                 ctor,
+                for_json,
                 collection: resolved.collection,
                 optional: prop_sig.optional,
             });
@@ -881,8 +893,8 @@ fn resolve_local_specifier_type(
         "Date" => {
             // gd_impl type Iso8601Date.gd must be provided
             // TODO: create reference impl?
-            let mut result = TypeResolution::from("Iso8601Date");
-            result.ctor = Some(ModelValueCtor::new(&result.name));
+            let mut result = TypeResolution::gd_impl();
+            result.type_name = Some(result.name.clone());
             result.gd_impl = true;
             result
         }
@@ -894,7 +906,7 @@ fn resolve_local_specifier_type(
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::from("Dictionary"));
+            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::new("Dictionary"));
             result.collection = Some(ModelVarCollection {
                 init: "{}".to_string(),
                 is_array: false,
@@ -910,7 +922,7 @@ fn resolve_local_specifier_type(
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::from("Array"));
+            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::new("Array"));
             result.collection = Some(ModelVarCollection {
                 init: "[]".to_string(),
                 is_array: true,
@@ -1055,8 +1067,8 @@ fn resolve_type_decl(
         Decl::TsInterface(intf) => {
             context.pos.push(intf.span.to_owned());
             let id = intf.id.to_id();
-            let mut tr = TypeResolution::from(&intf.id);
-            tr.ctor = Some(ModelValueCtor::new(&tr.name));
+            let mut tr: TypeResolution = intf.id.clone().into();
+            tr.type_name = Some(tr.name.clone());
             resolved_and_id = Some((tr, id.clone()));
             context.pos.pop();
         }
@@ -1104,7 +1116,7 @@ fn resolve_type_decl(
         Decl::TsEnum(ts_enum) => {
             let id = ts_enum.id.to_id();
             ts_enum_to_push = Some(&ts_enum);
-            resolved_and_id = Some((TypeResolution::from(&ts_enum.id), id));
+            resolved_and_id = Some((ts_enum.id.clone().into(), id));
         }
         _ => {
             dbg!(decl);
@@ -1209,13 +1221,13 @@ fn add_import(
     r: &TypeResolution,
 ) {
     // assume it's an imported type if there's a constructor
-    if let Some(ctor) = &r.ctor {
-        if context.output_type_name != r.name && !ctor.builtin {
+    if let Some(type_name) = &r.type_name {
+        if &context.output_type_name != type_name && !is_builtin(type_name) {
             imports.insert(
-                ctor.name.to_string(),
+                type_name.to_string(),
                 ModelImportContext {
-                    name: ctor.name.clone(),
-                    src: format!("{}.gd", &r.name),
+                    name: type_name.clone(),
+                    src: format!("{}.gd", &type_name),
                     gd_impl: r.gd_impl,
                 },
             );
