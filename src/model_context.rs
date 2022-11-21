@@ -2,7 +2,7 @@ use std::{collections::HashSet, path::PathBuf};
 
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ModelImportContext {
     pub name: String,
     pub src: String,
@@ -86,7 +86,11 @@ impl ModelValueForJson {
             name: name.to_string(),
             builtin,
             start: String::from(""),
-            end: if nullable { format!("{} if ", for_json_str) } else { for_json_str },
+            end: if nullable {
+                format!("{} if ", for_json_str)
+            } else {
+                for_json_str
+            },
             suffix: if nullable {
                 Some(" != null else null".to_string())
             } else {

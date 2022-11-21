@@ -27,7 +27,6 @@
                 "test-fixtures/test-interface.ts"
             ],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "rust: cargo build"
         },
         {
             "type": "lldb",
@@ -48,7 +47,6 @@
             "console":"internalConsole",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "rust: cargo build"
         }
     ]
 }

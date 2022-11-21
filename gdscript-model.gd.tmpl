@@ -23,7 +23,7 @@ var __initialized = false
 var {var_decl.name}: {var_decl.decl_type}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
 {{ endfor -}}
 
-func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}):
+func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}) -> void:
     update(src)
 
 func update(src: { src_type.name }) -> void:
@@ -68,7 +68,7 @@ func update(src: { src_type.name }) -> void:
 
 func for_json() -> Dictionary:
     # custom logic to serialize to dict/array/primitive for json
-    result = \{}
+    var result = \{}
     if !__initialized:
         return result
 {{ for var_init in vars -}}
@@ -99,13 +99,14 @@ func for_json() -> Dictionary:
 
 {{ endif -}}{#- var_init.collection -#}
 {{- endfor }}
+    return result
 
 # Checks to see whether an optional property has been assigned or not.
 # Works for non-optional properties too though if update() has been called
 # then they should always be true.
-func is_set(property_name: String):
+func is_set(property_name: String) -> bool:
     return __initialized && property_name in __assigned_properties
 
 # True if update() has been called
-func is_initialized():
+func is_initialized() -> bool:
     return __initialized

@@ -30,9 +30,9 @@ use deno_ast::swc::{
     atoms::Atom,
     common::{comments::Comments, serializer::Type, BytePos, Span},
 };
+use model_context::is_builtin;
 use model_context::ModelEnum;
 use model_context::ModelValueForJson;
-use model_context::is_builtin;
 use model_context::{
     ModelContext, ModelImportContext, ModelSrcType, ModelValueCtor, ModelVarCollection,
     ModelVarInit,
@@ -55,11 +55,14 @@ use std::{
 
 use crate::model_context::ModelEnumMember;
 
+const TERM_WIDTH: usize = 180;
+const ISO_DATE_TYPE_NAME: &str = "Iso8601Date";
 const TEMPLATE_NAME: &str = "gdscript-model";
+
 const TYPE_DIRECTIVE: &str = "@typescript-to-gdscript-type";
 const SKIP_DIRECTIVE: &str = "@typescript-to-gdscript-skip";
 const GD_IMPL_DIRECTIVE: &str = "@typescript-to-gdscript-gd-impl";
-const TERM_WIDTH: usize = 180;
+
 pub mod model_context;
 
 fn main() {
@@ -109,7 +112,7 @@ fn main() {
         let mut import_stack: Vec<PathBuf> = Vec::new();
         for filename in src_files.iter() {
             let canonical_filepath = canonical_module_filename(&directory, &filename);
-            parse_all_imports(
+            parse_recursive(
                 &mut import_stack,
                 &mut imports,
                 &canonical_filepath,
@@ -155,7 +158,6 @@ fn read_and_parse_file(import_stack: &mut Vec<PathBuf>, filename: &Path) -> Pars
         "Unable to read file {:?}\n${:#?}",
         filename, import_stack
     ));
-    let text_info = SourceTextInfo::new(source_text.into());
     return parse_module(ParseParams {
         specifier: String::from(
             filename
@@ -163,7 +165,7 @@ fn read_and_parse_file(import_stack: &mut Vec<PathBuf>, filename: &Path) -> Pars
                 .expect(&format!("filename invalid {:?}", filename)),
         ),
         media_type: MediaType::TypeScript,
-        text_info,
+        text_info: SourceTextInfo::new(source_text.into()),
         capture_tokens: true,
         maybe_syntax: None,
         scope_analysis: false,
@@ -189,7 +191,7 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
     return result.with_extension("ts");
 }
 
-fn parse_all_imports(
+fn parse_recursive(
     import_stack: &mut Vec<PathBuf>,
     imported_modules: &mut HashMap<PathBuf, ParsedSource>,
     canonical_filepath: &Path,
@@ -223,7 +225,7 @@ fn parse_all_imports(
                     }
                     break;
                 }
-                parse_all_imports(import_stack, imported_modules, &m_filename, debug_print);
+                parse_recursive(import_stack, imported_modules, &m_filename, debug_print);
             }
         }
     }
@@ -512,8 +514,16 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
 
 #[derive(Debug)]
 struct TypeResolution {
-    name: String,
-    type_name: Option<String>,
+    // type name for the property declaration
+    // for collections this may be Array/Dictionary
+    // in that case the actual_type contains the real type name
+    type_name: String,
+    // type name for the constructor/for_json
+    // if the property is a collection type then
+    // this is the type for items that are added to the collection.
+    // if this is None, then type_name is a builtin type that requires
+    // no extra work to serialize/deserialize
+    ctor_type: Option<String>,
     nullable: bool,
     collection: Option<ModelVarCollection>,
     comment: Option<String>,
@@ -523,8 +533,8 @@ struct TypeResolution {
 impl TypeResolution {
     fn new(name: &str) -> Self {
         TypeResolution {
-            name: String::from(name),
-            type_name: None,
+            type_name: String::from(name),
+            ctor_type: None,
             nullable: false,
             collection: None,
             comment: None,
@@ -542,8 +552,8 @@ impl TypeResolution {
 impl From<Ident> for TypeResolution {
     fn from(ident: Ident) -> Self {
         TypeResolution {
-            name: String::from(&*ident.to_id().0),
-            type_name: None,
+            type_name: String::from(&*ident.to_id().0),
+            ctor_type: None,
             nullable: false,
             collection: None,
             comment: None,
@@ -568,10 +578,9 @@ fn resolve_type_ref(
         // Special case where we want to exclude the contents of this part of the tree
         // for example we encountered a GD_IMPL_DIRECTIVE on an interface union
         if resolved_type.gd_impl {
-            resolved_type.gd_impl = false;
-            resolved_type.name = (&*id.0).to_string();
-            if resolved_type.type_name.is_some() {
-                resolved_type.type_name = Some(resolved_type.name.clone());
+            if resolved_type.type_name == "" {
+                resolved_type.type_name = (&*id.0).to_string();
+                resolved_type.ctor_type = Some(resolved_type.type_name.clone());
             }
         }
         add_import(context, imports, &resolved_type);
@@ -606,7 +615,7 @@ fn resolve_type(
                 .stack
                 .push(format!("resolve array_type {:?}", array_type));
             let mut result = resolve_type(context, imports, &array_type.elem_type);
-            result.name = "Array".to_string();
+            result.type_name = "Array".to_string();
             result.collection = Some(ModelVarCollection {
                 init: "[]".to_string(),
                 is_array: true,
@@ -654,7 +663,7 @@ fn resolve_type(
 
                     let mut a_type = resolve_type(context, imports, &a);
                     let mut b_type = resolve_type(context, imports, &b);
-                    let b_is_null = b_type.name == "null";
+                    let b_is_null = b_type.type_name == "null";
                     context.stack.push(format!(
                         "resolve union_type ({:?} types)",
                         union_type.types.len()
@@ -663,7 +672,7 @@ fn resolve_type(
                         // Add a suffix to check for null and avoid the constructor if the value is null.
                         // NOTE: We only have to do this if resolve_type created a constructor
                         a_type.nullable = true;
-                        a_type.comment = Some(format!("{} | null", &a_type.name.clone()));
+                        a_type.comment = Some(format!("{} | null", &a_type.type_name.clone()));
                         a_type
                     } else {
                         let all_types: Vec<TypeResolution> = union_type
@@ -675,18 +684,17 @@ fn resolve_type(
                             "union_types: {:?}",
                             all_types
                                 .iter()
-                                .map(|tr| &tr.name)
+                                .map(|tr| &tr.type_name)
                                 .collect::<Vec<&String>>()
                         ));
-                        if !all_types.iter().all(|rt| rt.name == a_type.name) {
+                        if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
+                            dbg!(context.get_info());
                             if have_directive(context, GD_IMPL_DIRECTIVE) {
-                                a_type = TypeResolution::new("");
-                                a_type.type_name = Some(a_type.name.clone());
-                                a_type.gd_impl = true;
+                                a_type = TypeResolution::gd_impl();
                             } else {
                                 let all_types = all_types
                                     .into_iter()
-                                    .map(|tr| tr.name)
+                                    .map(|tr| tr.type_name)
                                     .collect::<Vec<String>>();
                                 let pos = context.pos.last().unwrap();
                                 if context.debug_print {
@@ -814,20 +822,24 @@ fn get_intf_model_var(
         let resolved = resolve_type(context, imports, &*type_ann.type_ann);
         context.stack.pop();
         if let Some(src_name) = src_name {
-            let (ctor, for_json) = if let Some(type_name) = resolved.type_name {
+            let (ctor, for_json) = if let Some(type_name) = resolved.ctor_type {
                 (
                     ModelValueCtor::new(&type_name, resolved.nullable),
                     ModelValueForJson::new(&type_name, resolved.nullable),
                 )
             } else {
-                (ModelValueCtor::empty(resolved.nullable), ModelValueForJson::empty(resolved.nullable))
+                // This can happen for builtin types where we should not import a type
+                (
+                    ModelValueCtor::empty(resolved.nullable),
+                    ModelValueForJson::empty(resolved.nullable),
+                )
             };
 
             //  = prop_sig.type_ann?.type_ann;
             return Some(ModelVarInit {
                 name: src_name.to_case(Case::Snake),
                 comment: resolved.comment,
-                decl_type: resolved.name,
+                decl_type: resolved.type_name,
                 decl_init: None,
                 src_name,
                 ctor,
@@ -892,10 +904,10 @@ fn resolve_local_specifier_type(
     let result = decl_resolved.unwrap_or_else(|| match (sstr) {
         "Date" => {
             // gd_impl type Iso8601Date.gd must be provided
-            // TODO: create reference impl?
+            // TODO: create reference implementation gdscript code?
             let mut result = TypeResolution::gd_impl();
-            result.type_name = Some(result.name.clone());
-            result.gd_impl = true;
+            result.type_name = ISO_DATE_TYPE_NAME.to_string();
+            result.ctor_type = Some(result.type_name.clone());
             result
         }
         "Record" => {
@@ -1068,7 +1080,7 @@ fn resolve_type_decl(
             context.pos.push(intf.span.to_owned());
             let id = intf.id.to_id();
             let mut tr: TypeResolution = intf.id.clone().into();
-            tr.type_name = Some(tr.name.clone());
+            tr.ctor_type = Some(tr.type_name.clone());
             resolved_and_id = Some((tr, id.clone()));
             context.pos.pop();
         }
@@ -1187,7 +1199,7 @@ fn update_resolve_from_comments(context: &ModuleContext, result: &mut TypeResolu
                 .captures(&c.text)
                 .and_then(|c| c.get(1))
             {
-                result.name = gd_type.as_str().into();
+                result.type_name = gd_type.as_str().into();
             }
         }
     }
@@ -1221,7 +1233,7 @@ fn add_import(
     r: &TypeResolution,
 ) {
     // assume it's an imported type if there's a constructor
-    if let Some(type_name) = &r.type_name {
+    if let Some(type_name) = &r.ctor_type {
         if &context.output_type_name != type_name && !is_builtin(type_name) {
             imports.insert(
                 type_name.to_string(),
@@ -1232,5 +1244,158 @@ fn add_import(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use deno_ast::{
+        parse_module,
+        swc::ast::{Decl, ExportDecl, Module, ModuleDecl, ModuleItem, TsInterfaceDecl},
+        MediaType, ParseParams, ParsedSource, SourceTextInfo,
+    };
+
+    use crate::{
+        get_intf_model,
+        model_context::{ModelContext, ModelImportContext},
+        ModuleContext, GD_IMPL_DIRECTIVE,
+    };
+
+    const ts_intf_union: &'static str = "
+        interface AKind {
+            kind: 'a'
+        }
+        interface BKind {
+            kind: 'b'
+        }
+        // {{}}
+        export type AnyKind = AKind | BKind
+
+        export interface Intf {
+            anyKindProp: AnyKind;
+        }
+    ";
+    struct TestContext {
+        imports: HashMap<PathBuf, ParsedSource>,
+        filename: PathBuf,
+    }
+
+    fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
+        let filename: PathBuf = filename.into();
+        let parsed_source = parse_module(ParseParams {
+            specifier: filename.to_string_lossy().into(),
+            media_type: MediaType::TypeScript,
+            text_info: SourceTextInfo::new(source.into()),
+            capture_tokens: true,
+            maybe_syntax: None,
+            scope_analysis: false,
+        })
+        .unwrap();
+
+        let mut imports: HashMap<PathBuf, ParsedSource> = HashMap::new();
+        imports.insert(filename.to_path_buf(), parsed_source);
+        let mut model: Option<ModelContext> = None;
+        TestContext { imports, filename }
+    }
+
+    fn module_context<'a>(test_context: &'a TestContext) -> ModuleContext<'a> {
+        let parsed_source_ref = test_context.imports.get(&test_context.filename).unwrap();
+        ModuleContext::new(
+            false,
+            &test_context.filename,
+            &test_context.filename,
+            parsed_source_ref,
+            &test_context.imports,
+        )
+    }
+
+    fn get_exported_intf(module: &Module) -> (&Box<TsInterfaceDecl>, &ExportDecl) {
+        module
+            .body
+            .iter()
+            .map(|node| {
+                if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
+                    Some(export)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .map(|export| {
+                if let Decl::TsInterface(intf) = &export.decl {
+                    Some((intf, export))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn iso_date_type() {
+        let src = "export interface Intf { date: Date }";
+        let mut test_context = parse_from_string("iso-date-type.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        let imports: Vec<ModelImportContext> = model
+            .imports
+            .into_iter()
+            .filter(|i| &i.name == "Iso8601Date")
+            .collect();
+        assert_eq!(
+            imports.len(),
+            1,
+            "Should be one import for Iso8601Date type {:?}",
+            imports
+        );
+        let import = imports.get(0).unwrap();
+        assert_eq!(
+            import.gd_impl, true,
+            "Import should be marked as gd_impl: {:?}\n{}",
+            import, src
+        );
+    }
+
+    #[test]
+    fn gd_impl_for_intf_union() {
+        let src = ts_intf_union.replace("{{}}", &GD_IMPL_DIRECTIVE);
+        let mut test_context = parse_from_string("any-kind.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        let import = model
+            .imports
+            .iter()
+            .filter(|i| &i.name == "AnyKind")
+            .next()
+            .unwrap();
+        assert_eq!(
+            import.gd_impl, true,
+            "Import should be marked as gd_impl: {:?}\n{}",
+            import, src
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn no_gd_impl_for_intf_union() {
+        let mut test_context = parse_from_string("any-kind.ts", ts_intf_union);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
     }
 }
