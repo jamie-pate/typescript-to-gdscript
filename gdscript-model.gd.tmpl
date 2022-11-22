@@ -9,8 +9,8 @@ extends Reference
 const {import.name} = preload("{{ if import.gd_impl }}.{{ endif }}./{import.src}"){{ endfor }}
 {{ for enum in enums -}}
 enum {enum.name} \{
-    {{ for m in enum.members }}{m.name} = {m.value}{{ if not @last }},
-    {{ endif }}{{ endfor }}
+	{{ for m in enum.members }}{m.name} = {m.value}{{ if not @last }},
+	{{ endif }}{{ endfor }}
 }
 {{ endfor }}
 {state_vars}
@@ -22,24 +22,24 @@ enum {enum.name} \{
 var {var_decl.name}: {var_decl.decl_type}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
 {{ endfor }}
 func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}) -> void:
-    update(src)
+	update(src)
 
 func update(src: { src_type.name }) -> void:
-    # custom import logic can be added by overriding this function
+	# custom import logic can be added by overriding this function
 
-    __initialized = __initialized || len(src) > 0
+	__initialized = __initialized || len(src) > 0
 {{ for var in vars -}}
 { var.init }
 {{ endfor }}
 
 func for_json() -> Dictionary:
-    # custom logic to serialize to dict/array/primitive for json
-    var result = \{}
-    if !__initialized:
-        return result
+	# custom logic to serialize to dict/array/primitive for json
+	var result = \{}
+	if !__initialized:
+		return result
 {{ for var in vars -}}
 { var.for_json }
 {{ endfor }}
-    return result
+	return result
 
 {state_methods}

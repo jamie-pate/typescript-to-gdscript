@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use indoc::formatdoc;
 use serde::Serialize;
 
-pub const DEFAULT_INDENT: &'static str = "    ";
+pub const DEFAULT_INDENT: &'static str = "\t";
 
 pub const STATE_VARS: &'static str = "\
 # Tracks the null/optional status of builtin properties that are not nullable in gdscript
@@ -200,6 +200,7 @@ impl ModelVarDescriptor {
         }
     }
     pub fn render_init(&self, indent: &str) -> String {
+        let ws = DEFAULT_INDENT;
         let src = "src";
         let mut parts: Vec<String> = Vec::new();
         let src_specifier = format!("{}.{}", src, self.src_name);
@@ -255,8 +256,8 @@ impl ModelVarDescriptor {
                 parts.push(add_indent(
                     formatdoc! {"
                         for __item__ in {src_specifier}:
-                            var __value__ = {init_value}
-                            {name}.append(__value__)"
+                        {ws}var __value__ = {init_value}
+                        {ws}{name}.append(__value__)"
                     },
                     indent,
                     indent_level,
@@ -266,8 +267,8 @@ impl ModelVarDescriptor {
                 parts.push(add_indent(
                     formatdoc! {"
                         for __key__ in {src_specifier}:
-                            var __value__ = {src_specifier}[__key__]
-                            {name}[__key__] = {init_value}"
+                        {ws}var __value__ = {src_specifier}[__key__]
+                        {ws}{name}[__key__] = {init_value}"
                     },
                     indent,
                     indent_level,
@@ -333,12 +334,13 @@ impl ModelVarDescriptor {
         }
         if let Some(collection) = &self.collection {
             let c_init = &collection.init;
+            let ws = DEFAULT_INDENT;
 
             if collection.nullable {
                 parts.push(add_indent(
                     formatdoc! {"
                         if is_null('{name}'):
-                            {dest_specifier} = null
+                        {ws}{dest_specifier} = null
                         else:"},
                     indent,
                     indent_level,
@@ -361,8 +363,8 @@ impl ModelVarDescriptor {
                 parts.push(add_indent(
                     formatdoc! {"
                         for __item__ in {name}:
-                            var __value__ = {for_json_value}
-                            {dest_specifier}.append(__value__)"
+                        {ws}var __value__ = {for_json_value}
+                        {ws}{dest_specifier}.append(__value__)"
                     },
                     indent,
                     indent_level,
@@ -372,8 +374,8 @@ impl ModelVarDescriptor {
                 parts.push(add_indent(
                     formatdoc! {"
                         for __key__ in {name}:
-                            var __value__ = {name}[__key__]
-                            {dest_specifier}[__key__] = {for_json_value}"
+                        {ws}var __value__ = {name}[__key__]
+                        {ws}{dest_specifier}[__key__] = {for_json_value}"
                     },
                     indent,
                     indent_level,
@@ -461,11 +463,13 @@ pub struct ModelContext {
 #[cfg(test)]
 mod tests {
     use convert_case::{Case, Casing};
-    use indoc::indoc;
+    use indoc::{indoc, formatdoc};
 
     use crate::model_context::{ModelVarCollection, DEFAULT_INDENT};
 
     use super::{add_indent, is_builtin, ModelValueCtor, ModelValueForJson, ModelVarDescriptor};
+
+    const ws: &'static str = DEFAULT_INDENT;
 
     impl ModelVarDescriptor {
         fn for_test(src_name: &str, optional: bool, type_name: &str, type_nullable: bool) -> Self {
@@ -484,8 +488,8 @@ mod tests {
         }
     }
 
-    fn indent(str: &str) -> String {
-        add_indent(str.to_string(), DEFAULT_INDENT, 1)
+    fn indent(str: String) -> String {
+        add_indent(str, DEFAULT_INDENT, 1)
     }
 
     #[test]
@@ -534,7 +538,7 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true\n\
                 prop_name = Intf.new(src.propName)\
-            "
+            ".to_string()
             )
         );
     }
@@ -549,7 +553,7 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true if src.propName != null else null\n\
                 prop_name = Intf.new(src.propName) if src.propName != null else null\
-            "
+            ".to_string()
             )
         );
     }
@@ -564,7 +568,7 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true\n\
                 prop_name = src.propName\
-            "
+            ".to_string()
             )
         );
     }
@@ -580,7 +584,7 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true if src.propName != null else null\n\
                 prop_name = src.propName if src.propName != null else \"\"\
-            "
+            ".to_string()
             )
         );
     }
@@ -591,10 +595,10 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true
-                    prop_name = Intf.new(src.propName)\
+                {ws}__assigned_properties.prop_name = true
+                {ws}prop_name = Intf.new(src.propName)\
             "})
         );
     }
@@ -605,10 +609,10 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = Intf.new(src.propName) if src.propName != null else null\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = Intf.new(src.propName) if src.propName != null else null\
             "})
         );
     }
@@ -621,10 +625,10 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true
-                    prop_name = src.propName\
+                {ws}__assigned_properties.prop_name = true
+                {ws}prop_name = src.propName\
             "})
         );
     }
@@ -636,10 +640,10 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = src.propName if src.propName != null else \"\"\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = src.propName if src.propName != null else \"\"\
             "})
         );
     }
@@ -656,12 +660,12 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true
                 prop_name = []
                 for __item__ in src.propName:
-                    var __value__ = Intf.new(__item__)
-                    prop_name.append(__value__)\
+                {ws}var __value__ = Intf.new(__item__)
+                {ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -678,12 +682,12 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true
-                prop_name = {}
+                prop_name = {{}}
                 for __key__ in src.propName:
-                    var __value__ = src.propName[__key__]
-                    prop_name[__key__] = Intf.new(__value__)\
+                {ws}var __value__ = src.propName[__key__]
+                {ws}prop_name[__key__] = Intf.new(__value__)\
             "})
         );
     }
@@ -700,13 +704,13 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true if src.propName != null else null
                 prop_name = []
                 if src.propName != null:
-                    for __item__ in src.propName:
-                        var __value__ = Intf.new(__item__)
-                        prop_name.append(__value__)\
+                {ws}for __item__ in src.propName:
+                {ws}{ws}var __value__ = Intf.new(__item__)
+                {ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -723,13 +727,13 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true if src.propName != null else null
-                prop_name = {}
+                prop_name = {{}}
                 if src.propName != null:
-                    for __key__ in src.propName:
-                        var __value__ = src.propName[__key__]
-                        prop_name[__key__] = Intf.new(__value__)\
+                {ws}for __key__ in src.propName:
+                {ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}prop_name[__key__] = Intf.new(__value__)\
             "})
         );
     }
@@ -746,13 +750,13 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true if src.propName != null else null
                 prop_name = []
                 if src.propName != null:
-                    for __item__ in src.propName:
-                        var __value__ = Intf.new(__item__) if __item__ != null else null
-                        prop_name.append(__value__)\
+                {ws}for __item__ in src.propName:
+                {ws}{ws}var __value__ = Intf.new(__item__) if __item__ != null else null
+                {ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -769,13 +773,13 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 __assigned_properties.prop_name = true if src.propName != null else null
-                prop_name = {}
+                prop_name = {{}}
                 if src.propName != null:
-                    for __key__ in src.propName:
-                        var __value__ = src.propName[__key__]
-                        prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
+                {ws}for __key__ in src.propName:
+                {ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
             "})
         );
     }
@@ -792,14 +796,14 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = []
-                    if src.propName != null:
-                        for __item__ in src.propName:
-                            var __value__ = Intf.new(__item__) if __item__ != null else null
-                            prop_name.append(__value__)\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = []
+                {ws}if src.propName != null:
+                {ws}{ws}for __item__ in src.propName:
+                {ws}{ws}{ws}var __value__ = Intf.new(__item__) if __item__ != null else null
+                {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -816,14 +820,14 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = {}
-                    if src.propName != null:
-                        for __key__ in src.propName:
-                            var __value__ = src.propName[__key__]
-                            prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = {{}}
+                {ws}if src.propName != null:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
             "})
         );
     }
@@ -842,14 +846,14 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = []
-                    if src.propName != null:
-                        for __item__ in src.propName:
-                            var __value__ = __item__ if __item__ != null else null
-                            prop_name.append(__value__)\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = []
+                {ws}if src.propName != null:
+                {ws}{ws}for __item__ in src.propName:
+                {ws}{ws}{ws}var __value__ = __item__ if __item__ != null else null
+                {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -866,14 +870,14 @@ mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if src.propName in src:
-                    __assigned_properties.prop_name = true if src.propName != null else null
-                    prop_name = {}
-                    if src.propName != null:
-                        for __key__ in src.propName:
-                            var __value__ = src.propName[__key__]
-                            prop_name[__key__] = __value__ if __value__ != null else null\
+                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}prop_name = {{}}
+                {ws}if src.propName != null:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}prop_name[__key__] = __value__ if __value__ != null else null\
             "})
         );
     }
@@ -887,7 +891,7 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name.for_json()\
-            "
+            ".to_string()
             )
         );
     }
@@ -901,7 +905,7 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name.for_json() if prop_name != null else null\
-            "
+            ".to_string()
             )
         );
     }
@@ -915,7 +919,7 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name\
-            "
+            ".to_string()
             )
         );
     }
@@ -930,7 +934,7 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name if !is_null('prop_name') else null\
-            "
+            ".to_string()
             )
         );
     }
@@ -941,9 +945,9 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    result.propName = prop_name.for_json()\
+                {ws}result.propName = prop_name.for_json()\
             "})
         );
     }
@@ -954,9 +958,9 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    result.propName = prop_name.for_json() if prop_name != null else null\
+                {ws}result.propName = prop_name.for_json() if prop_name != null else null\
             "})
         );
     }
@@ -969,9 +973,9 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    result.propName = prop_name\
+                {ws}result.propName = prop_name\
             "})
         );
     }
@@ -983,9 +987,9 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    result.propName = prop_name if !is_null('prop_name') else null\
+                {ws}result.propName = prop_name if !is_null('prop_name') else null\
             "})
         );
     }
@@ -1002,11 +1006,11 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 result.propName = []
                 for __item__ in prop_name:
-                    var __value__ = __item__.for_json()
-                    result.propName.append(__value__)\
+                {ws}var __value__ = __item__.for_json()
+                {ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1023,11 +1027,11 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
-                result.propName = {}
+            indent(formatdoc! {"
+                result.propName = {{}}
                 for __key__ in prop_name:
-                    var __value__ = prop_name[__key__]
-                    result.propName[__key__] = __value__.for_json()\
+                {ws}var __value__ = prop_name[__key__]
+                {ws}result.propName[__key__] = __value__.for_json()\
             "})
         );
     }
@@ -1044,14 +1048,14 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_null('prop_name'):
-                    result.propName = null
+                {ws}result.propName = null
                 else:
-                    result.propName = []
-                    for __item__ in prop_name:
-                        var __value__ = __item__.for_json()
-                        result.propName.append(__value__)\
+                {ws}result.propName = []
+                {ws}for __item__ in prop_name:
+                {ws}{ws}var __value__ = __item__.for_json()
+                {ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1068,14 +1072,14 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_null('prop_name'):
-                    result.propName = null
+                {ws}result.propName = null
                 else:
-                    result.propName = {}
-                    for __key__ in prop_name:
-                        var __value__ = prop_name[__key__]
-                        result.propName[__key__] = __value__.for_json()\
+                {ws}result.propName = {{}}
+                {ws}for __key__ in prop_name:
+                {ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}result.propName[__key__] = __value__.for_json()\
             "})
         );
     }
@@ -1092,14 +1096,14 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_null('prop_name'):
-                    result.propName = null
+                {ws}result.propName = null
                 else:
-                    result.propName = []
-                    for __item__ in prop_name:
-                        var __value__ = __item__.for_json() if __item__ != null else null
-                        result.propName.append(__value__)\
+                {ws}result.propName = []
+                {ws}for __item__ in prop_name:
+                {ws}{ws}var __value__ = __item__.for_json() if __item__ != null else null
+                {ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1116,14 +1120,14 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_null('prop_name'):
-                    result.propName = null
+                {ws}result.propName = null
                 else:
-                    result.propName = {}
-                    for __key__ in prop_name:
-                        var __value__ = prop_name[__key__]
-                        result.propName[__key__] = __value__.for_json() if __value__ != null else null\
+                {ws}result.propName = {{}}
+                {ws}for __key__ in prop_name:
+                {ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}result.propName[__key__] = __value__.for_json() if __value__ != null else null\
             "})
         );
     }
@@ -1140,15 +1144,15 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    if is_null('prop_name'):
-                        result.propName = null
-                    else:
-                        result.propName = []
-                        for __item__ in prop_name:
-                            var __value__ = __item__.for_json() if __item__ != null else null
-                            result.propName.append(__value__)\
+                {ws}if is_null('prop_name'):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = []
+                {ws}{ws}for __item__ in prop_name:
+                {ws}{ws}{ws}var __value__ = __item__.for_json() if __item__ != null else null
+                {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1165,15 +1169,15 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    if is_null('prop_name'):
-                        result.propName = null
-                    else:
-                        result.propName = {}
-                        for __key__ in prop_name:
-                            var __value__ = prop_name[__key__]
-                            result.propName[__key__] = __value__.for_json() if __value__ != null else null\
+                {ws}if is_null('prop_name'):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = {{}}
+                {ws}{ws}for __key__ in prop_name:
+                {ws}{ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}{ws}result.propName[__key__] = __value__.for_json() if __value__ != null else null\
             "})
         );
     }
@@ -1192,15 +1196,15 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    if is_null('prop_name'):
-                        result.propName = null
-                    else:
-                        result.propName = []
-                        for __item__ in prop_name:
-                            var __value__ = __item__ if __item__ != null else null
-                            result.propName.append(__value__)\
+                {ws}if is_null('prop_name'):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = []
+                {ws}{ws}for __item__ in prop_name:
+                {ws}{ws}{ws}var __value__ = __item__ if __item__ != null else null
+                {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1217,16 +1221,17 @@ mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(indoc! {"
+            indent(formatdoc! {"
                 if is_set('prop_name'):
-                    if is_null('prop_name'):
-                        result.propName = null
-                    else:
-                        result.propName = {}
-                        for __key__ in prop_name:
-                            var __value__ = prop_name[__key__]
-                            result.propName[__key__] = __value__ if __value__ != null else null\
+                {ws}if is_null('prop_name'):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = {{}}
+                {ws}{ws}for __key__ in prop_name:
+                {ws}{ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}{ws}result.propName[__key__] = __value__ if __value__ != null else null\
             "})
         );
     }
+
 }

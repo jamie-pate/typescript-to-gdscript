@@ -17,9 +17,9 @@ typescript-to-gdscript [--debug-print] templatefile.gd.tmpl outputdir input1.ts 
 ```
 
 Reads all interfaces from input.ts files exports them to `outputdir/[InterfaceName].gd` files.
-Uses templatefile.gd.tmpl as the template.
 
-When `--debug-print` is provided the program will emit extra debug information on stderr.
+* Uses templatefile.gd.tmpl as the template.
+* When `--debug-print` is provided the program will emit extra debug information on stderr.
 
 ## Output
 
@@ -31,23 +31,44 @@ The example template outputs a gdscript 'model' class that extends `Reference` a
 
 ### Class Documentation
 
-`func update(src: Dictionary) -> void`: Pass an incoming json object to the update method or constructor to initialize the instance.
+`GeneratedClass.new(src: Dictionary = {}) -> GeneratedClass`:
+----
+Create a new instance of the generated class. All properties from the TypeScript interface will be
+loaded out of the src `Dictionary` and properties of other `GeneratedClass` types will be instantiated.
+
+See `update()` for more details.
+
+`func update(src: Dictionary) -> void`:
+----
+
+Pass an incoming json object to the update method or constructor to initialize the instance.
     * Optional properties will remain unset. You can check their status by calling `.is_set(property_name)`
     * Nullable properties may remain unset if the property type is a gdscript builtin type. Call `is_null(property_name)` to check if the property is null.
     * Check `.is_initialized()` to see if the `.update()` method has been called yet with a non-empty object.
 
-`func for_json() -> Dictionary`: Call this method to convert the object back into a `Dictionary` so it can be serialized to JSON data.
+`func for_json() -> Dictionary`:
+----
 
-`func is_set(property_name: String) -> bool`: Check to see if an optional property was set.
+Call this method to convert the object back into a `Dictionary` so it can be serialized to JSON data.
+
+`func is_set(property_name: String) -> bool`:
+----
+Check to see if an optional property was set.
     * This method is neccesary to avoid overriding `_get` and `_set` and `_get_property_list`, which are kind of broken in Godot 3.
 
-`func is_null(property_name: String) -> bool`: Check to see if a nullable property was null.
+`func is_null(property_name: String) -> bool`:
+----
+Check to see if a nullable property was null.
     * This method is neccesary because gdscript builtin types cannot be null, and there is no `Union` type in gdscript.
 
-`func set_null(property_name: String) -> void`: Set a property to null.
+`func set_null(property_name: String) -> void`:
+----
+Set a property to null.
     * If the `typeof()` the property is `TYPE_OBJECT` or `TYPE_NIL` then that property will also be set to `null`.
 
-`func is_initialized() -> bool`: Returns true when `update()` has been called with a non-empty `Dictionary`
+`func is_initialized() -> bool`:
+----
+Returns true when `update()` has been called with a non-empty `Dictionary`
 
 ## Directives
 
@@ -106,85 +127,85 @@ var record_object: TestInterface
 var array: Array
 
 func _init(src: Dictionary = {}) -> void:
-    update(src)
+	update(src)
 
 func update(src: Dictionary) -> void:
-    # custom import logic can be added by overriding this function
+	# custom import logic can be added by overriding this function
 
-    __initialized = __initialized || len(src) > 0
-    __assigned_properties.id = true
-    id = src.id
-    __assigned_properties.str_key = true
-    str_key = src.strKey
-    __assigned_properties.float_key = true
-    float_key = src.floatKey
-    __assigned_properties.bool_key = true
-    bool_key = src.boolKey
-    if src.optionalDate in src:
-        __assigned_properties.optional_date = true
-        optional_date = Iso8601Date.new(src.optionalDate)
-    if src.nullableOptionalDate in src:
-        __assigned_properties.nullable_optional_date = true if src.nullableOptionalDate != null else null
-        nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate) if src.nullableOptionalDate != null else null
-    __assigned_properties.date = true
-    date = Iso8601Date.new(src.date)
-    __assigned_properties.str_lit = true
-    str_lit = src.strLit
-    __assigned_properties.int_lit = true
-    int_lit = src.intLit
-    __assigned_properties.float_lit = true
-    float_lit = src.floatLit
-    __assigned_properties.str_union = true
-    str_union = src.strUnion
-    __assigned_properties.intf_union = true
-    intf_union = AnyKind.new(src.intfUnion)
-    __assigned_properties.true_lit = true
-    true_lit = src.trueLit
-    __assigned_properties.imported = true
-    imported = ImportedInterface.new(src.imported)
-    __assigned_properties.record_object = true
-    record_object = {}
-    for __key__ in src.recordObject:
-        var __value__ = src.recordObject[__key__]
-        record_object[__key__] = TestInterface.new(__value__)
-    __assigned_properties.array = true
-    array = []
-    for __item__ in src.array:
-        var __value__ = ImportedInterface.new(__item__)
-        array.append(__value__)
+	__initialized = __initialized || len(src) > 0
+	__assigned_properties.id = true
+	id = src.id
+	__assigned_properties.str_key = true
+	str_key = src.strKey
+	__assigned_properties.float_key = true
+	float_key = src.floatKey
+	__assigned_properties.bool_key = true
+	bool_key = src.boolKey
+	if src.optionalDate in src:
+		__assigned_properties.optional_date = true
+		optional_date = Iso8601Date.new(src.optionalDate)
+	if src.nullableOptionalDate in src:
+		__assigned_properties.nullable_optional_date = true if src.nullableOptionalDate != null else null
+		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate) if src.nullableOptionalDate != null else null
+	__assigned_properties.date = true
+	date = Iso8601Date.new(src.date)
+	__assigned_properties.str_lit = true
+	str_lit = src.strLit
+	__assigned_properties.int_lit = true
+	int_lit = src.intLit
+	__assigned_properties.float_lit = true
+	float_lit = src.floatLit
+	__assigned_properties.str_union = true
+	str_union = src.strUnion
+	__assigned_properties.intf_union = true
+	intf_union = AnyKind.new(src.intfUnion)
+	__assigned_properties.true_lit = true
+	true_lit = src.trueLit
+	__assigned_properties.imported = true
+	imported = ImportedInterface.new(src.imported)
+	__assigned_properties.record_object = true
+	record_object = {}
+	for __key__ in src.recordObject:
+		var __value__ = src.recordObject[__key__]
+		record_object[__key__] = TestInterface.new(__value__)
+	__assigned_properties.array = true
+	array = []
+	for __item__ in src.array:
+		var __value__ = ImportedInterface.new(__item__)
+		array.append(__value__)
 
 
 func for_json() -> Dictionary:
-    # custom logic to serialize to dict/array/primitive for json
-    var result = {}
-    if !__initialized:
-        return result
-    result.id = id
-    result.strKey = str_key
-    result.floatKey = float_key
-    result.boolKey = bool_key
-    if is_set('optional_date'):
-        result.optionalDate = optional_date.for_json()
-    if is_set('nullable_optional_date'):
-        result.nullableOptionalDate = nullable_optional_date.for_json() if nullable_optional_date != null else null
-    result.date = date.for_json()
-    result.strLit = str_lit
-    result.intLit = int_lit
-    result.floatLit = float_lit
-    result.strUnion = str_union
-    result.intfUnion = intf_union.for_json()
-    result.trueLit = true_lit
-    result.imported = imported.for_json()
-    result.recordObject = {}
-    for __key__ in record_object:
-        var __value__ = record_object[__key__]
-        result.recordObject[__key__] = __value__.for_json()
-    result.array = []
-    for __item__ in array:
-        var __value__ = __item__.for_json()
-        result.array.append(__value__)
+	# custom logic to serialize to dict/array/primitive for json
+	var result = {}
+	if !__initialized:
+		return result
+	result.id = id
+	result.strKey = str_key
+	result.floatKey = float_key
+	result.boolKey = bool_key
+	if is_set('optional_date'):
+		result.optionalDate = optional_date.for_json()
+	if is_set('nullable_optional_date'):
+		result.nullableOptionalDate = nullable_optional_date.for_json() if nullable_optional_date != null else null
+	result.date = date.for_json()
+	result.strLit = str_lit
+	result.intLit = int_lit
+	result.floatLit = float_lit
+	result.strUnion = str_union
+	result.intfUnion = intf_union.for_json()
+	result.trueLit = true_lit
+	result.imported = imported.for_json()
+	result.recordObject = {}
+	for __key__ in record_object:
+		var __value__ = record_object[__key__]
+		result.recordObject[__key__] = __value__.for_json()
+	result.array = []
+	for __item__ in array:
+		var __value__ = __item__.for_json()
+		result.array.append(__value__)
 
-    return result
+	return result
 
 # Checks to see whether an optional property has been assigned or not.
 # Works for non-optional properties too though if update() has been called
