@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::Serialize;
 
@@ -10,26 +10,37 @@ pub struct ModelImportContext {
 }
 
 // Extra template data that's required if the variable is an array or dictionary
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ModelVarCollection {
     // Initial value (empty array, dict, PoolStringArray, etc)
     pub init: String,
     pub is_array: bool,
     pub is_dict: bool,
+    pub nullable: bool,
 }
 
 lazy_static! {
-    static ref BUILTINS: HashSet<&'static str> = {
-        let mut b = HashSet::new();
-        for builtin in ["", "Array", "Dictionary"] {
-            b.insert(builtin);
+    static ref BUILTIN_DEFAULTS: HashMap<&'static str, &'static str> = {
+        let mut b = HashMap::new();
+        for builtin in [
+            ("", "ERROR"),
+            ("Array", "[]"),
+            ("Dictionary", "{}"),
+            // default 'null' values for godot primitives..
+            // unfortunately there's no way to make them nullable.
+            ("String", "\"\""),
+            ("int", "0"),
+            ("float", "0f"),
+            ("bool", "false")
+        ] {
+            b.insert(builtin.0, builtin.1);
         }
         b
     };
 }
 
 pub fn is_builtin(name: &str) -> bool {
-    BUILTINS.contains(name)
+    BUILTIN_DEFAULTS.contains_key(name)
 }
 
 impl ModelValueCtor {
@@ -37,11 +48,11 @@ impl ModelValueCtor {
         ModelValueCtor::new("", nullable)
     }
     pub fn new(name: &str, nullable: bool) -> Self {
-        let parens = name != "";
         let builtin = is_builtin(name);
+        let null_value = BUILTIN_DEFAULTS.get(name).unwrap_or(&"null");
         // TODO: add other builtin conversions from json here
         let new_str = if !builtin { ".new" } else { "" };
-        let (lparen_str, rparen_str) = if parens { ("(", ")") } else { ("", "") };
+        let (lparen_str, rparen_str) = if new_str != "" { ("(", ")") } else { ("", "") };
         ModelValueCtor {
             name: name.to_string(),
             builtin,
@@ -52,7 +63,7 @@ impl ModelValueCtor {
                 format!("{} if ", rparen_str)
             },
             suffix: if nullable {
-                Some(" != null else null".to_string())
+                Some(format!(" != null else {}", null_value))
             } else {
                 None
             },
@@ -120,7 +131,7 @@ pub struct ModelEnum {
     pub members: Vec<ModelEnumMember>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ModelVarInit {
     // name of the variable in the gdscript object (camel_case)
     pub name: String,
@@ -140,9 +151,11 @@ pub struct ModelVarInit {
     pub collection: Option<ModelVarCollection>,
     // if the whole thing is optional
     pub optional: bool,
+    // Gdscript primitives are non_nullable...
+    pub non_nullable: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ModelSrcType {
     pub name: String,
     pub init: Option<String>,
@@ -153,7 +166,7 @@ pub struct ArrayItemInit {
     pub ctor: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ModelContext {
     pub class_name: String,
     pub canonical_src_filepath: PathBuf,

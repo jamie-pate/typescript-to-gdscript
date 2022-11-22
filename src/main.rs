@@ -10,6 +10,7 @@ use deno_ast::swc::ast::Pat;
 use deno_ast::swc::ast::TsEnumDecl;
 use deno_ast::swc::ast::TsEnumMemberId;
 use deno_ast::swc::ast::TsLit;
+use deno_ast::swc::ast::TsUnionType;
 use deno_ast::SourcePos;
 use deno_ast::SourceRange;
 use deno_ast::SourceRanged;
@@ -241,6 +242,7 @@ struct ModuleRegexes {
 }
 struct ModuleContext<'a> {
     regexes: ModuleRegexes,
+    type_directive_consumed: bool,
     pos: Vec<Span>,
     resolving_local: HashSet<Id>,
     stack: Vec<String>,
@@ -292,6 +294,7 @@ impl<'a> ModuleContext<'a> {
             },
             enums: Vec::new(),
             output_type_name: "".into(),
+            type_directive_consumed: false,
             pos: Vec::new(),
             resolving_local: HashSet::new(),
             debug_print,
@@ -512,7 +515,7 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TypeResolution {
     // type name for the property declaration
     // for collections this may be Array/Dictionary
@@ -595,6 +598,98 @@ fn resolve_type_ref(
     }
 }
 
+fn resolve_union_type(
+    context: &mut ModuleContext,
+    imports: &mut HashMap<String, ModelImportContext>,
+    union_type: &TsUnionType,
+) -> TypeResolution {
+    if (union_type.types.len() < 2) {
+        panic!(
+            "At least two types required in a union type\n{}",
+            context.get_info()
+        );
+    }
+    let mut it = union_type.types.iter();
+    let (a, b) = (it.next().unwrap(), it.next().unwrap());
+
+    let mut a_type = resolve_type(context, imports, &a);
+    let mut b_type = resolve_type(context, imports, &b);
+    let b_is_null = b_type.type_name == "null";
+    context.stack.push(format!(
+        "resolve union_type ({:?} types)",
+        union_type.types.len()
+    ));
+    let result = if union_type.types.len() == 2 && b_is_null {
+        // Add a suffix to check for null and avoid the constructor if the value is null.
+        // NOTE: We only have to do this if resolve_type created a constructor
+        if let Some(collection) = &mut a_type.collection {
+            collection.nullable = true;
+        } else {
+            a_type.nullable = true;
+        }
+        a_type.comment = Some(format!("{} | null", &a_type.type_name.clone()));
+        a_type
+    } else {
+        let all_types: Vec<TypeResolution> = union_type
+            .types
+            .iter()
+            .map(|t| resolve_type(context, imports, &t))
+            .collect();
+        context.stack.push(format!(
+            "union_types: {:?}",
+            all_types
+                .iter()
+                .map(|tr| &tr.type_name)
+                .collect::<Vec<&String>>()
+        ));
+        if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
+            if have_directive(context, GD_IMPL_DIRECTIVE) {
+                a_type = TypeResolution::gd_impl();
+            } else {
+                let all_types = all_types
+                    .into_iter()
+                    .map(|tr| tr.type_name)
+                    .collect::<Vec<String>>();
+                let pos = context.pos.last().unwrap();
+                if context.debug_print {
+                    dbg_pos(context, "Union");
+                }
+                panic!(
+                    "Unsupported type, union types must all have the same godot type unless \
+                    you supply {} directive. {:?}\n{:#?}",
+                    GD_IMPL_DIRECTIVE,
+                    all_types,
+                    context.get_info()
+                );
+            }
+        }
+        // TODO: lousy hack, add a property to denote this?
+        let literal_comments = all_types
+            .iter()
+            .map(|rt| &rt.comment)
+            .flatten()
+            .filter(|c| c.starts_with("Literally "))
+            .map(|c| c.replace("Literally ", ""))
+            .collect::<Vec<String>>();
+        if literal_comments.len() == all_types.len() {
+            a_type.comment = Some(format!("Literally {}", literal_comments.join(" | ")));
+        } else if all_types.len() > 0 {
+            a_type.comment = Some(
+                all_types
+                    .iter()
+                    .map(|rt| rt.comment.to_owned())
+                    .flatten()
+                    .collect::<Vec<String>>()
+                    .join(" | "),
+            );
+        }
+        context.stack.pop();
+        a_type
+    };
+    context.stack.pop();
+    result
+}
+
 // type name, ctor, collection, comment
 fn resolve_type(
     context: &mut ModuleContext,
@@ -615,12 +710,15 @@ fn resolve_type(
                 .stack
                 .push(format!("resolve array_type {:?}", array_type));
             let mut result = resolve_type(context, imports, &array_type.elem_type);
+            let ctor_type = result.type_name;
             result.type_name = "Array".to_string();
             result.collection = Some(ModelVarCollection {
                 init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
+                nullable: false,
             });
+            result.ctor_type = Some(ctor_type);
             context.stack.pop();
             result
         }
@@ -642,7 +740,7 @@ fn resolve_type(
                     context.get_info()
                 ),
             };
-            update_resolve_from_comments(context, &mut result);
+            result = update_resolve_from_comments(context, result);
             context.stack.pop();
             result
         }
@@ -652,87 +750,7 @@ fn resolve_type(
                 .push("resolve union_or_intersection_type".into());
             let result = match ui_type {
                 TsUnionOrIntersectionType::TsUnionType(union_type) => {
-                    if (union_type.types.len() < 2) {
-                        panic!(
-                            "At least two types required in a union type\n{}",
-                            context.get_info()
-                        );
-                    }
-                    let mut it = union_type.types.iter();
-                    let (a, b) = (it.next().unwrap(), it.next().unwrap());
-
-                    let mut a_type = resolve_type(context, imports, &a);
-                    let mut b_type = resolve_type(context, imports, &b);
-                    let b_is_null = b_type.type_name == "null";
-                    context.stack.push(format!(
-                        "resolve union_type ({:?} types)",
-                        union_type.types.len()
-                    ));
-                    let result = if union_type.types.len() == 2 && b_is_null {
-                        // Add a suffix to check for null and avoid the constructor if the value is null.
-                        // NOTE: We only have to do this if resolve_type created a constructor
-                        a_type.nullable = true;
-                        a_type.comment = Some(format!("{} | null", &a_type.type_name.clone()));
-                        a_type
-                    } else {
-                        let all_types: Vec<TypeResolution> = union_type
-                            .types
-                            .iter()
-                            .map(|t| resolve_type(context, imports, &t))
-                            .collect();
-                        context.stack.push(format!(
-                            "union_types: {:?}",
-                            all_types
-                                .iter()
-                                .map(|tr| &tr.type_name)
-                                .collect::<Vec<&String>>()
-                        ));
-                        if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
-                            if have_directive(context, GD_IMPL_DIRECTIVE) {
-                                a_type = TypeResolution::gd_impl();
-                            } else {
-                                let all_types = all_types
-                                    .into_iter()
-                                    .map(|tr| tr.type_name)
-                                    .collect::<Vec<String>>();
-                                let pos = context.pos.last().unwrap();
-                                if context.debug_print {
-                                    dbg_pos(context, "Union");
-                                }
-                                panic!("Unsupported type, union types must all have the same godot type unless \
-                                    you supply {} directive. {:?}\n{:#?}",
-                                    GD_IMPL_DIRECTIVE,
-                                    all_types,
-                                    context.get_info()
-                                );
-                            }
-                        }
-                        // TODO: lousy hack, add a property to denote this?
-                        let literal_comments = all_types
-                            .iter()
-                            .map(|rt| &rt.comment)
-                            .flatten()
-                            .filter(|c| c.starts_with("Literally "))
-                            .map(|c| c.replace("Literally ", ""))
-                            .collect::<Vec<String>>()
-                            .join(" | ");
-                        if literal_comments.len() == all_types.len() {
-                            a_type.comment = Some(format!("Literally {}", literal_comments));
-                        } else if all_types.len() > 0 {
-                            a_type.comment = Some(
-                                all_types
-                                    .iter()
-                                    .map(|rt| rt.comment.to_owned())
-                                    .flatten()
-                                    .collect::<Vec<String>>()
-                                    .join(" | "),
-                            );
-                        }
-                        context.stack.pop();
-                        a_type
-                    };
-                    context.stack.pop();
-                    result
+                    resolve_union_type(context, imports, union_type)
                 }
                 TsUnionOrIntersectionType::TsIntersectionType(_) => {
                     panic!("Intersection types are not allowed\n{}", context.get_info());
@@ -818,26 +836,30 @@ fn get_intf_model_var(
             &src_name.as_ref().unwrap_or(&empty),
             context.get_text(TERM_WIDTH)
         ));
+        context.pos.push(prop_sig.span);
+        context.type_directive_consumed = false;
         let resolved = resolve_type(context, imports, &*type_ann.type_ann);
+        context.pos.pop();
         context.stack.pop();
         if let Some(src_name) = src_name {
-            let (ctor, for_json) = if let Some(type_name) = resolved.ctor_type {
+            let (ctor, for_json) = if let Some(ctor_type) = resolved.ctor_type {
                 (
-                    ModelValueCtor::new(&type_name, resolved.nullable),
-                    ModelValueForJson::new(&type_name, resolved.nullable),
+                    ModelValueCtor::new(&ctor_type, resolved.nullable),
+                    ModelValueForJson::new(&ctor_type, resolved.nullable),
                 )
             } else {
                 // This can happen for builtin types where we should not import a type
                 (
-                    ModelValueCtor::empty(resolved.nullable),
-                    ModelValueForJson::empty(resolved.nullable),
+                    ModelValueCtor::new(&resolved.type_name, resolved.nullable),
+                    ModelValueForJson::new(&resolved.type_name, resolved.nullable),
                 )
             };
 
-            //  = prop_sig.type_ann?.type_ann;
             return Some(ModelVarInit {
                 name: src_name.to_case(Case::Snake),
                 comment: resolved.comment,
+                // all collections and builtin types (so far) are non-nullable
+                non_nullable: resolved.collection.is_some() || ctor.builtin,
                 decl_type: resolved.type_name,
                 decl_init: None,
                 src_name,
@@ -922,6 +944,7 @@ fn resolve_local_specifier_type(
                 init: "{}".to_string(),
                 is_array: false,
                 is_dict: true,
+                nullable: false,
             });
             result
         }
@@ -938,6 +961,7 @@ fn resolve_local_specifier_type(
                 init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
+                nullable: false,
             });
             result
         }
@@ -1187,7 +1211,11 @@ fn have_directive(context: &ModuleContext, directive: &str) -> bool {
     return false;
 }
 
-fn update_resolve_from_comments(context: &ModuleContext, result: &mut TypeResolution) {
+fn update_resolve_from_comments(
+    context: &mut ModuleContext,
+    result: TypeResolution,
+) -> TypeResolution {
+    let mut result = result;
     let c = context.parsed_source.comments().as_single_threaded();
     let span = context.pos.last().unwrap();
     if let Some(comments) = c.get_leading(span.lo) {
@@ -1198,10 +1226,17 @@ fn update_resolve_from_comments(context: &ModuleContext, result: &mut TypeResolu
                 .captures(&c.text)
                 .and_then(|c| c.get(1))
             {
-                result.type_name = gd_type.as_str().into();
+                // we only want to consume the type directive once for a given property signature...
+                // maybe we want to change this to a number later and allow multiple directives
+                if !context.type_directive_consumed {
+                    context.type_directive_consumed = true;
+                    result = result.clone();
+                    result.type_name = gd_type.as_str().into();
+                }
             }
         }
     }
+    result
 }
 
 fn dbg_pos(context: &ModuleContext, comment: &str) {
@@ -1258,8 +1293,8 @@ mod tests {
 
     use crate::{
         get_intf_model,
-        model_context::{ModelContext, ModelImportContext},
-        ModuleContext, GD_IMPL_DIRECTIVE,
+        model_context::{ModelContext, ModelImportContext, ModelVarInit},
+        ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
     };
 
     const ts_intf_union: &'static str = "
@@ -1396,5 +1431,128 @@ mod tests {
 
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut context, &intf);
+    }
+
+    #[test]
+    fn nullable_primitives() {
+        let src = format!(
+            "
+            export interface Intf {{
+                str: string | null;
+                float: number | null;
+                /* {}: int */
+                int: number | null;
+                bool: boolean | null;
+            }}
+        ",
+            TYPE_DIRECTIVE
+        );
+        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        let mut vars: HashMap<String, &ModelVarInit> = HashMap::new();
+        for var in model.vars.iter() {
+            assert_eq!(
+                var.ctor.builtin, true,
+                "{} should be builtin",
+                var.ctor.name
+            );
+            assert_eq!(
+                var.ctor.suffix.is_some(),
+                true,
+                "{} has no suffix?",
+                var.ctor.name
+            );
+            vars.insert(var.src_name.to_string(), var);
+        }
+        assert_eq!(
+            vars.get("str").unwrap().ctor.suffix.as_ref().unwrap(),
+            " != null else \"\""
+        );
+        assert_eq!(
+            vars.get("int").unwrap().ctor.suffix.as_ref().unwrap(),
+            " != null else 0"
+        );
+        assert_eq!(
+            vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
+            " != null else 0f"
+        );
+        assert_eq!(
+            vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),
+            " != null else false"
+        );
+    }
+
+    #[test]
+    fn nullable_collections() {
+        let src = "
+            interface Member {
+                kind: \"member\";
+            }
+            export interface Intf {
+                array: Member[] | null;
+                arrayGeneric: Array<Member> | null;
+                record: Record<string, Member> | null;
+                optionalNullableArrayOfStringOrNull?: Array<string | null> | null;
+                optionalNullableArrayOfMemberOrNull?: Array<Member | null> | null;
+            }
+        ";
+        let mut test_context = parse_from_string("nullable-collections.ts", src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        let mut vars: HashMap<String, &ModelVarInit> = HashMap::new();
+        for var in model.vars.iter() {
+            assert_eq!(
+                var.optional,
+                var.name.starts_with("optional"),
+                "{} is not optional",
+                var.name
+            );
+            assert_eq!(
+                var.collection.is_some(),
+                true,
+                "{} has no collection",
+                var.name
+            );
+            assert_eq!(
+                var.collection.as_ref().unwrap().nullable,
+                true,
+                "{} collection is not nullable",
+                var.name
+            );
+            assert_eq!(
+                var.ctor.suffix.is_some(),
+                var.name.starts_with("optional"),
+                "{} has no suffix?",
+                var.name
+            );
+            vars.insert(var.src_name.to_string(), var);
+        }
+
+        // TODO: these tests are wrong
+        // test for collection.nullable , optional, ctor.nullable etc.
+        let (array, arrayGeneric, record, optAOfStrOrNull, optAOfMemberOrNull) = (
+            vars.get("array").unwrap(),
+            vars.get("arrayGeneric").unwrap(),
+            vars.get("record").unwrap(),
+            vars.get("optionalNullableArrayOfStringOrNull").unwrap(),
+            vars.get("optionalNullableArrayOfMemberOrNull").unwrap(),
+        );
+        assert_eq!(
+            optAOfStrOrNull.ctor.suffix.as_ref().unwrap(),
+            " != null else \"\""
+        );
+        assert_eq!(
+            optAOfMemberOrNull.ctor.suffix.as_ref().unwrap(),
+            " != null else null"
+        );
     }
 }

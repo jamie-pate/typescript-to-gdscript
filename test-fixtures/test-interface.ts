@@ -72,6 +72,8 @@ export interface TestInterfaceRoot {
   importedArray1: ImportedArray1;
   importedArray2: ImportedArray2;
   importedOrNull: ImportedInterface | null;
+  optionalIntOrNull?: int | null;
+  optionalImportedOrNull?: ImportedInterface | null;
 
   someEnum: SomeEnum;
   //TODO: strEnum: StringExprEnum;
@@ -81,6 +83,7 @@ export interface TestInterfaceRoot {
   stringArray2: Array<string>;
   optionalArray?: int[];
   optionalRecord?: Record<string, string>;
+  optionalNullableArrayOfStringOrNull?: Array<string | null> | null;
 
   stringOrNullArray: Array<string | null>;
   stringArrayOrNull: string[] | null;

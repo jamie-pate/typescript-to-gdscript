@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'typescript-to-gdscript'",
+            "name": "executable 'typescript-to-gdscript'",
             "cargo": {
                 "args": [
                     "build",
@@ -31,7 +31,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'typescript-to-gdscript'",
+            "name": "unit tests in executable 'typescript-to-gdscript'",
             "cargo": {
                 "args": [
                     "test",
@@ -45,7 +45,7 @@
                 }
             },
             "console":"internalConsole",
-            "args": [],
+            "args": ["--nocapture"],
             "cwd": "${workspaceFolder}",
         }
     ]
