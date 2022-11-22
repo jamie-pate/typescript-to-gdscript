@@ -45,7 +45,10 @@
                 }
             },
             "console":"internalConsole",
-            "args": ["--nocapture"],
+            "args": [
+                "--nocapture",
+                //"--", "--exact", "model_context::tests::render_for_json"
+            ],
             "cwd": "${workspaceFolder}",
         }
     ]

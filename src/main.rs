@@ -34,9 +34,12 @@ use deno_ast::swc::{
 use model_context::is_builtin;
 use model_context::ModelEnum;
 use model_context::ModelValueForJson;
+use model_context::DEFAULT_INDENT;
+use model_context::STATE_METHODS;
+use model_context::STATE_VARS;
 use model_context::{
     ModelContext, ModelImportContext, ModelSrcType, ModelValueCtor, ModelVarCollection,
-    ModelVarInit,
+    ModelVarDescriptor,
 };
 use pathdiff::diff_paths;
 use regex::Regex;
@@ -93,6 +96,7 @@ fn main() {
             "Failed to load template file {:?}",
             &template_filename
         ));
+        let template_indent = detect_indent(&template_str, debug_print);
         let mut template = TinyTemplate::new();
         template
             .add_template(TEMPLATE_NAME, &template_str)
@@ -132,6 +136,7 @@ fn main() {
                 &canonical_filepath,
                 &template_filename,
                 &template,
+                &template_indent,
                 debug_print,
             );
         }
@@ -248,6 +253,7 @@ struct ModuleContext<'a> {
     stack: Vec<String>,
     enums: Vec<TsEnumDecl>,
     debug_print: bool,
+    indent: String,
     relative_filepath: &'a Path,
     canonical_filepath: &'a Path,
     output_type_name: String,
@@ -259,6 +265,7 @@ struct ModuleContext<'a> {
 impl<'a> ModuleContext<'a> {
     fn new(
         debug_print: bool,
+        indent: &str,
         relative_filepath: &'a Path,
         canonical_filepath: &'a Path,
         parsed_source: &'a ParsedSource,
@@ -266,6 +273,7 @@ impl<'a> ModuleContext<'a> {
     ) -> Self {
         ModuleContext::_new(
             debug_print,
+            indent,
             relative_filepath,
             canonical_filepath,
             parsed_source,
@@ -276,6 +284,7 @@ impl<'a> ModuleContext<'a> {
     }
     fn _new(
         debug_print: bool,
+        indent: &str,
         relative_filepath: &'a Path,
         canonical_filepath: &'a Path,
         parsed_source: &'a ParsedSource,
@@ -298,6 +307,7 @@ impl<'a> ModuleContext<'a> {
             pos: Vec::new(),
             resolving_local: HashSet::new(),
             debug_print,
+            indent: indent.to_string(),
             relative_filepath,
             canonical_filepath,
             parsed_source,
@@ -314,6 +324,7 @@ impl<'a> ModuleContext<'a> {
     ) -> Self {
         ModuleContext::_new(
             self.debug_print,
+            &self.indent,
             relative_filepath,
             canonical_filepath,
             parsed_source,
@@ -370,6 +381,7 @@ fn convert(
     canonical_filepath: &Path,
     template_filename: &Path,
     template: &TinyTemplate,
+    template_indent: &str,
     debug_print: bool,
 ) {
     let parsed_source = imports.get(canonical_filepath).expect(&format!(
@@ -381,6 +393,7 @@ fn convert(
     let mut models: Vec<ModelContext> = Vec::new();
     let mut context = ModuleContext::new(
         debug_print,
+        template_indent,
         filename,
         canonical_filepath,
         parsed_source,
@@ -473,7 +486,7 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
     let (symbol, _tag) = intf.id.to_id();
     context.output_type_name = String::from(&*symbol);
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
-    let vars = intf
+    let var_descriptors: Vec<_> = intf
         .body
         .body
         .iter()
@@ -509,7 +522,13 @@ fn get_intf_model(context: &mut ModuleContext, intf: &TsInterfaceDecl) -> ModelC
             name: "Dictionary".to_string(),
             init: Some("{}".to_string()),
         }),
-        vars,
+        state_methods: STATE_METHODS.to_string(),
+        state_vars: STATE_VARS.to_string(),
+        vars: var_descriptors
+            .iter()
+            .map(|d| d.render(&context.indent))
+            .collect(),
+        var_descriptors,
         enums,
         imports,
     }
@@ -814,7 +833,7 @@ fn get_intf_model_var(
     context: &mut ModuleContext,
     imports: &mut HashMap<String, ModelImportContext>,
     type_element: &TsTypeElement,
-) -> Option<ModelVarInit> {
+) -> Option<ModelVarDescriptor> {
     if let TsTypeElement::TsPropertySignature(prop_sig) = type_element {
         let src_name = if let Expr::Ident(id) = &*prop_sig.key {
             Some(id.sym.to_string())
@@ -855,7 +874,7 @@ fn get_intf_model_var(
                 )
             };
 
-            return Some(ModelVarInit {
+            return Some(ModelVarDescriptor {
                 name: src_name.to_case(Case::Snake),
                 comment: resolved.comment,
                 // all collections and builtin types (so far) are non-nullable
@@ -1281,6 +1300,35 @@ fn add_import(
     }
 }
 
+fn detect_indent(template_str: &str, debug_print: bool) -> String {
+    let space_str = if let Some(m) = Regex::new("(?m)^[ \t]+").unwrap().find(&template_str) {
+        if debug_print {
+            eprint!("Detected ");
+        }
+        m.as_str()
+    } else {
+        if debug_print {
+            eprintln!("Unable to detect indentation");
+            eprint!("Using default ");
+        }
+        DEFAULT_INDENT
+    };
+    if debug_print {
+        let char_name = if let Some(char) = space_str.chars().nth(0) {
+            if char == ' ' {
+                "spaces"
+            } else {
+                "tabs"
+            }
+        } else {
+            "unknown"
+        };
+        let num = space_str.len();
+        eprintln!("indentation of {num} {char_name}.");
+    }
+    space_str.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -1293,7 +1341,7 @@ mod tests {
 
     use crate::{
         get_intf_model,
-        model_context::{ModelContext, ModelImportContext, ModelVarInit},
+        model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
         ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
     };
 
@@ -1338,6 +1386,7 @@ mod tests {
         let parsed_source_ref = test_context.imports.get(&test_context.filename).unwrap();
         ModuleContext::new(
             false,
+            DEFAULT_INDENT,
             &test_context.filename,
             &test_context.filename,
             parsed_source_ref,
@@ -1454,8 +1503,8 @@ mod tests {
 
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut context, &intf);
-        let mut vars: HashMap<String, &ModelVarInit> = HashMap::new();
-        for var in model.vars.iter() {
+        let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
+        for var in model.var_descriptors.iter() {
             assert_eq!(
                 var.ctor.builtin, true,
                 "{} should be builtin",
@@ -1508,8 +1557,8 @@ mod tests {
 
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut context, &intf);
-        let mut vars: HashMap<String, &ModelVarInit> = HashMap::new();
-        for var in model.vars.iter() {
+        let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
+        for var in model.var_descriptors.iter() {
             assert_eq!(
                 var.optional,
                 var.name.starts_with("optional"),
