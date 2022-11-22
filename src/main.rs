@@ -688,7 +688,6 @@ fn resolve_type(
                                 .collect::<Vec<&String>>()
                         ));
                         if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
-                            dbg!(context.get_info());
                             if have_directive(context, GD_IMPL_DIRECTIVE) {
                                 a_type = TypeResolution::gd_impl();
                             } else {
