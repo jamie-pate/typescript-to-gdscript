@@ -44,7 +44,7 @@ The example template outputs a gdscript 'model' class that extends `Reference` a
 `func is_null(property_name: String) -> bool`: Check to see if a nullable property was null.
     * This method is neccesary because gdscript builtin types cannot be null, and there is no `Union` type in gdscript.
 
-`func set_null(property_name: String) -> bool`: Set a property to null.
+`func set_null(property_name: String) -> void`: Set a property to null.
     * If the `typeof()` the property is `TYPE_OBJECT` or `TYPE_NIL` then that property will also be set to `null`.
 
 `func is_initialized() -> bool`: Returns true when `update()` has been called with a non-empty `Dictionary`
@@ -198,7 +198,7 @@ func is_null(property_name: String) -> bool:
     return __initialized && property_name in __assigned_properties && __assigned_properties[property_name] == null
 
 # Set a property value to null
-func set_null(property_name: String) -> bool:
+func set_null(property_name: String) -> void:
     __assigned_properties[property_name] = null
     if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
         self[property_name] = null

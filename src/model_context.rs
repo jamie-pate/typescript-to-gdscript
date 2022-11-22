@@ -24,7 +24,7 @@ func is_null(property_name: String) -> bool:
     return __initialized && property_name in __assigned_properties && __assigned_properties[property_name] == null
 
 # Set a property value to null
-func set_null(property_name: String) -> bool:
+func set_null(property_name: String) -> void:
     __assigned_properties[property_name] = null
     if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
         self[property_name] = null
