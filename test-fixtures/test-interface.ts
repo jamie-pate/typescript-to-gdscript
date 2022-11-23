@@ -100,6 +100,10 @@ export interface TestInterfaceRoot {
   anyOrNull: any | null;
   // deno-lint-ignore no-explicit-any
   optionalAnyOrNull?: any | null;
+
+  tupleType: [string, string];
+  // not supported
+  // hetrogenousTupleType: [string, number];
 }
 
 /**

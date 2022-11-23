@@ -796,6 +796,25 @@ fn resolve_type(
             context.stack.pop();
             result
         }
+        // TODO: add array length check?
+        TsType::TsTupleType(tuple_type) => {
+            let elem_types = tuple_type
+                .elem_types
+                .iter()
+                .map(|t| resolve_type(context, imports, &t.ty))
+                .collect::<Vec<_>>();
+            let mut result = elem_types.get(0).unwrap().clone();
+            if !elem_types.iter().all(|t|t.type_name == result.type_name) {
+                panic!("Only homogenous tuple types are allowed {:#?}\n{}", tuple_type.elem_types, context.get_info());
+            }
+            result.collection = Some(ModelVarCollection {
+                init: "[]".to_string(),
+                is_array: true,
+                is_dict: false,
+                nullable: false
+            });
+            result
+        }
         _ => panic!(
             "IDK what to do with this type {:#?}\n{}",
             ts_type,
@@ -1749,5 +1768,27 @@ mod tests {
         assert_eq!(var.decl_type.is_none(), true);
         assert_eq!(var.ctor.start, "");
         assert_eq!(var.ctor.end, "");
+        assert_eq!(var.collection.is_none(), true);
+    }
+
+    #[test]
+    fn tuple_type() {
+        let src = "export interface Intf { value: [string, string] }";
+        let mut test_context = parse_from_string("tuple-type.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        assert_eq!(model.imports.len(), 0);
+        assert_eq!(model.var_descriptors.len(), 1);
+        let var = model.var_descriptors.get(0).unwrap();
+        assert_eq!(var.ctor.builtin, true);
+        assert_eq!(var.decl_type.as_ref().unwrap(), "String");
+        assert_eq!(var.ctor.start, "");
+        assert_eq!(var.ctor.end, "");
+        assert_eq!(&var.collection.as_ref().unwrap().is_array, &true);
+    }
     }
 }
