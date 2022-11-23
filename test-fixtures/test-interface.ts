@@ -113,3 +113,13 @@ export interface TestInterfaceRoot {
 export interface GenericExtend<T extends TestInterface> {
   arrayOfExtendsTestInterface: T[];
 }
+
+export interface ExtendBase {
+  base: true;
+}
+export interface ExtendLocal extends ExtendBase {
+  extend: true;
+}
+export interface ExtendImported extends ImportedInterface {
+  extend: true;
+}
