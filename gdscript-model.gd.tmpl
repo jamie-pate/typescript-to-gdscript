@@ -19,7 +19,7 @@ enum {enum.name} \{
 {{ if var_decl.comment -}}
 # {var_decl.comment}
 {{ endif -}}
-var {var_decl.name}: {var_decl.decl_type}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
+var {var_decl.name}{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
 {{ endfor }}
 func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}) -> void:
 	update(src)

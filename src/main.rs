@@ -762,6 +762,7 @@ fn resolve_type(
                 TsKeywordTypeKind::TsStringKeyword => TypeResolution::new("String"),
                 // used internally, probably not useful though
                 TsKeywordTypeKind::TsNullKeyword => TypeResolution::new("null"),
+                TsKeywordTypeKind::TsAnyKeyword => TypeResolution::new("any"),
                 kind => panic!(
                     "IDK what to do with keyword type {:#?}\n{}",
                     kind,
@@ -905,12 +906,25 @@ fn get_intf_model_var(
                 )
             };
 
+            let comment = if prop_sig.optional {
+                Some(if let Some(c) = resolved.comment {
+                    format!("optional {}", c)
+                } else {
+                    "optional".to_string()
+                })
+            } else {
+                resolved.comment
+            };
             return Some(ModelVarDescriptor {
                 name: src_name.to_case(Case::Snake),
-                comment: resolved.comment,
+                comment,
                 // all collections and builtin types (so far) are non-nullable
                 non_nullable: resolved.collection.is_some() || ctor.builtin,
-                decl_type: resolved.type_name,
+                decl_type: if resolved.type_name != "any" {
+                    Some(resolved.type_name)
+                } else {
+                    None
+                },
                 decl_init: None,
                 src_name,
                 ctor,
@@ -1716,5 +1730,24 @@ mod tests {
             assert_eq!(model.members.len(), 3);
             assert_eq!(model.members.get(0).unwrap().value, "\"one\"");
         }
+    }
+
+    #[test]
+    fn any_type() {
+        let src = "export interface Intf { value: any }";
+        let mut test_context = parse_from_string("any-type.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let (intf, export) = get_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf);
+        assert_eq!(model.imports.len(), 0);
+        assert_eq!(model.var_descriptors.len(), 1);
+        let var = model.var_descriptors.get(0).unwrap();
+        assert_eq!(var.ctor.builtin, true);
+        assert_eq!(var.decl_type.is_none(), true);
+        assert_eq!(var.ctor.start, "");
+        assert_eq!(var.ctor.end, "");
     }
 }

@@ -93,6 +93,13 @@ export interface TestInterfaceRoot {
   recordObject: Record<string, TestInterface>;
   orNull: string | null;
   objOrNull: TestInterface | null;
+
+  // deno-lint-ignore no-explicit-any
+  anyType: any;
+  // deno-lint-ignore no-explicit-any
+  anyOrNull: any | null;
+  // deno-lint-ignore no-explicit-any
+  optionalAnyOrNull?: any | null;
 }
 
 /**

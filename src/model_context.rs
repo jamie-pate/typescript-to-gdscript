@@ -62,7 +62,8 @@ lazy_static! {
             ("String", "\"\""),
             ("int", "0"),
             ("float", "0f"),
-            ("bool", "false")
+            ("bool", "false"),
+            ("any", "null"),
         ] {
             b.insert(builtin.0, builtin.1);
         }
@@ -175,7 +176,8 @@ pub struct ModelVarDescriptor {
     // comments
     pub comment: Option<String>,
     // gdscript type of the variable
-    pub decl_type: String,
+    // it could be None for the "any" type
+    pub decl_type: Option<String>,
     // optional initializer for declaration
     pub decl_init: Option<String>,
     // name of the variable in the typescript interface (pascalCase)
@@ -477,7 +479,11 @@ mod tests {
                 name: src_name.to_string().to_case(Case::Snake),
                 src_name: src_name.to_string(),
                 comment: Some("comment".to_string()),
-                decl_type: "".to_string(),
+                decl_type: if type_name != "any" {
+                    Some(type_name.to_string())
+                } else {
+                    None
+                },
                 decl_init: None,
                 ctor: ModelValueCtor::new(type_name, type_nullable),
                 for_json: ModelValueForJson::new(type_name, type_nullable),
