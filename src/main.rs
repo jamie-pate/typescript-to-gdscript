@@ -330,7 +330,7 @@ impl<'a> ModuleContext<'a> {
         }
     }
 
-    fn get_span_info(&self, span: &Span) -> String {
+    fn get_span_info(&self, span: &Span, stack: bool) -> String {
         let result = format!(
             "{}:{}\n{}",
             &self.relative_filepath.to_string_lossy(),
@@ -339,7 +339,7 @@ impl<'a> ModuleContext<'a> {
                 .start_line_fast(&self.parsed_source.text_info()),
             self.get_span_text(span)
         );
-        if self.debug_print {
+        if self.debug_print && stack {
             let stack = self
                 .stack
                 .clone()
@@ -353,7 +353,12 @@ impl<'a> ModuleContext<'a> {
     }
 
     fn get_info(&self) -> String {
-        self.get_span_info(self.pos.last().unwrap())
+        self.pos
+            .iter()
+            .enumerate()
+            .map(|(i, span)| self.get_span_info(span, i == self.pos.len() - 1))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -483,16 +488,17 @@ fn get_extends_intf_model(
 ) -> ModelContext {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
-        dbg!(&id);
         let resolved = if let Some(t) = resolve_imported_specifier_type(context, &id) {
             t
         } else if let Some(t) = resolve_local_specifier_type(context, imports, &id) {
             t
         } else {
+            if context.debug_print {
+                dbg!(expr);
+            }
             panic!(
-                "Couldn't resolve identifier that's extended {:?}\n{:#?}\n{}",
+                "Couldn't resolve identifier that's extended {:?}\n{}",
                 id.0,
-                expr,
                 context.get_info()
             );
         };
@@ -685,14 +691,16 @@ fn resolve_union_type(
     }
     let mut it = union_type.types.iter();
     let (a, b) = (it.next().unwrap(), it.next().unwrap());
-
+    context.stack.push(format!(
+        "resolve union_type ({:?} types: <\n\t{:?},\n\t{:?},\n\t ...?>)",
+        union_type.types.len(),
+        a,
+        b
+    ));
     let mut a_type = resolve_type(context, imports, &a);
     let mut b_type = resolve_type(context, imports, &b);
     let b_is_null = b_type.type_name == "null";
-    context.stack.push(format!(
-        "resolve union_type ({:?} types)",
-        union_type.types.len()
-    ));
+
     let result = if union_type.types.len() == 2 && b_is_null {
         // Add a suffix to check for null and avoid the constructor if the value is null.
         // NOTE: We only have to do this if resolve_type created a constructor
@@ -1111,15 +1119,26 @@ fn resolve_local_specifier_type_or_builtin(
                 dbg!(type_ref);
             }
             panic!(
-                "Unable to resolve type {:?} from {:?}, is it a built in type or generic type parameter?\n{}",
-                &id.0, context.relative_filepath, context.get_info()
-                )
-            },
+                "Unable to resolve type {} while exporting {:?}:{}.\n\
+                \tIs it a built in type or generic type parameter?\n\
+                \tYou can prefix {} with a comment containing {} or {} to skip this type.
+                \n{}",
+                &id.0,
+                context.relative_filepath,
+                context.output_type_name,
+                context.output_type_name,
+                SKIP_DIRECTIVE,
+                GD_IMPL_DIRECTIVE,
+                context.get_info()
+            )
+        }
     });
     context.stack.pop();
     result
 }
-
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>())
+}
 // TODO: resolve specifiers across modules until we find one that has @typescript-to-gdscript-type: int or something?
 fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<TypeResolution> {
     let mut result: Option<TypeResolution> = None;
@@ -1138,7 +1157,9 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                 module_path,
                 context.canonical_filepath.parent()
             ));
-            context.stack.push(String::from("found parsed module"));
+            context
+                .stack
+                .push(format!("found parsed module {:?}", &relative_filepath));
             let mut import_specifiers: HashMap<Id, PathBuf> = HashMap::new();
             let module = parsed_source.module();
             let mut imported_imports: HashMap<String, ModelImportContext> = HashMap::new();
@@ -1146,6 +1167,8 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                 context.inherit(relative_filepath.as_path(), module_path, parsed_source);
             extract_import_specifiers(&mut import_context, module);
             for node in module.body.iter() {
+                let t = format!("{:?}", node);
+
                 if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
                     import_context.pos.push(export.span.to_owned());
                     import_context.stack.push(format!(
@@ -1226,30 +1249,37 @@ fn resolve_type_decl(
     // if this id is supplied, only match declarations for this id's symbol
     match_id: &Id,
 ) -> Option<TypeResolution> {
-    let mut resolved_and_id: Option<(TypeResolution, Id)> = None;
+    let mut result: Option<TypeResolution> = None;
     let mut ts_enum_to_push: Option<&TsEnumDecl> = None;
     match decl {
         Decl::TsTypeAlias(alias) => {
-            context.pos.push(alias.span.to_owned());
-            context.stack.push("resolve_type_decl:TsTypeAlias".into());
-            resolved_and_id = Some((
-                resolve_type(context, imports, &alias.type_ann),
-                alias.id.to_id().clone(),
-            ));
-            if let Some((r, _)) = &resolved_and_id {
-                add_import(context, imports, &r);
+            result = if match_id.0 == alias.id.to_id().0 {
+                context.pos.push(alias.span.to_owned());
+                context.stack.push(format!(
+                    "resolve_type_decl:TsTypeAlias {}",
+                    alias.id.to_id().0
+                ));
+                let result = resolve_type(context, imports, &alias.type_ann);
+                add_import(context, imports, &result);
+                context.stack.pop();
+                context.pos.pop();
+                Some(result)
+            } else {
+                None
             }
-            context.stack.pop();
-            context.pos.pop();
         }
         Decl::TsInterface(intf) => {
-            context.pos.push(intf.span.to_owned());
-            let id = intf.id.to_id();
-            let mut tr: TypeResolution = intf.id.clone().into();
-            tr.interface_decl = Some(intf.as_ref().clone());
-            tr.ctor_type = Some(tr.type_name.clone());
-            resolved_and_id = Some((tr, id.clone()));
-            context.pos.pop();
+            result = if match_id.0 == intf.id.to_id().0 {
+                context.pos.push(intf.span.to_owned());
+                let id = intf.id.to_id();
+                let mut result: TypeResolution = intf.id.clone().into();
+                result.interface_decl = Some(intf.as_ref().clone());
+                result.ctor_type = Some(result.type_name.clone());
+                context.pos.pop();
+                Some(result)
+            } else {
+                None
+            }
         }
         Decl::Class(cls_decl) => {
             let id = cls_decl.ident.to_id();
@@ -1293,28 +1323,17 @@ fn resolve_type_decl(
             }
         }
         Decl::TsEnum(ts_enum) => {
-            let id = ts_enum.id.to_id();
-            ts_enum_to_push = Some(&ts_enum);
-            resolved_and_id = Some((ts_enum.id.clone().into(), id));
+            if match_id.0 == ts_enum.id.to_id().0 {
+                context.enums.push(ts_enum.as_ref().clone());
+                result = Some(ts_enum.id.clone().into())
+            }
         }
         _ => {
             dbg!(decl);
             panic!("IDK {}", context.get_info());
         }
     }
-    // check if it matches
-    if let Some((result, id)) = resolved_and_id {
-        if match_id.0 == id.0 {
-            if let Some(ts_enum) = ts_enum_to_push {
-                context.enums.push(ts_enum.to_owned());
-            }
-            Some(result)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    result
 }
 
 fn should_skip(context: &ModuleContext) -> bool {
