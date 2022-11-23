@@ -1,55 +1,56 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "executable 'typescript-to-gdscript'",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=typescript-to-gdscript",
-                    "--package=typescript-to-gdscript"
-                ],
-                "filter": {
-                    "name": "typescript-to-gdscript",
-                    "kind": "bin"
-                }
-            },
-            "console":"internalConsole",
-            "args": [
-                "--debug-print",
-                "./gdscript-model.gd.tmpl",
-                "./output",
-                "test-fixtures/test-interface.ts"
-            ],
-            "cwd": "${workspaceFolder}",
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "unit tests in executable 'typescript-to-gdscript'",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=typescript-to-gdscript",
-                    "--package=typescript-to-gdscript"
-                ],
-                "filter": {
-                    "name": "typescript-to-gdscript",
-                    "kind": "bin"
-                }
-            },
-            "console":"internalConsole",
-            "args": [
-                "--nocapture",
-                //"--", "--exact", "model_context::tests::render_for_json"
-            ],
-            "cwd": "${workspaceFolder}",
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "typescript-to-gdscript",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=typescript-to-gdscript",
+          "--package=typescript-to-gdscript"
+        ],
+        "filter": {
+          "name": "typescript-to-gdscript",
+          "kind": "bin"
         }
-    ]
+      },
+      "console": "internalConsole",
+      "args": [
+        "--debug-print",
+        "./gdscript-model.gd.tmpl",
+        "./output",
+        "test-fixtures/test-interface.ts"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "unit tests",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=typescript-to-gdscript",
+          "--package=typescript-to-gdscript"
+        ],
+        "filter": {
+          "name": "typescript-to-gdscript",
+          "kind": "bin"
+        }
+      },
+      "console": "internalConsole",
+      "args": [
+        "--nocapture",
+        "str_enum"
+        //"--", "--exact", "tests::auto_enum"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
 }

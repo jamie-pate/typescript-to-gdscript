@@ -1,20 +1,20 @@
 // random imported external module.
 // TODO: support reading .d.ts files
-import { source } from "common-tags";
+// deno-lint-ignore no-unused-vars
+import { source } from 'common-tags';
 
-import { int } from "./int.js";
-import { TeamId } from "./team-id.js";
+import { int } from './int.js';
+import { TeamId } from './team-id.js';
 import {
+  ImportedArray1,
+  ImportedArray2,
   ImportedInterface,
   ImportedRecord1,
   ImportedRecord2,
-  ImportedArray1,
-  ImportedArray2,
-} from "./imported-interface.js";
+} from './imported-interface.js';
 // external imports are ignored
-import { AnyKind } from "./any-kind.js";
+import { AnyKind } from './any-kind.js';
 
-// @TODO
 export enum SomeEnum {
   one,
   two,
@@ -22,9 +22,9 @@ export enum SomeEnum {
 }
 
 export enum StringExprEnum {
-  one = "one",
-  two = "two",
-  three = "three",
+  one = 'one',
+  two = 'two',
+  three = 'three',
 }
 
 export enum NumberExprEnum {
@@ -48,10 +48,10 @@ interface TestInterface {
   optionalDate?: Date;
   nullableOptionalDate?: Date | null;
   date: Date;
-  strLit: "abcd";
+  strLit: 'abcd';
   intLit: 1;
   floatLit: 1.0;
-  strUnion: "training" | "full";
+  strUnion: 'training' | 'full';
   intfUnion: AnyKind;
   trueLit: true;
   //bigIntLit: BigInt(9007199254740991);
@@ -76,8 +76,8 @@ export interface TestInterfaceRoot {
   optionalImportedOrNull?: ImportedInterface | null;
 
   someEnum: SomeEnum;
-  //TODO: strEnum: StringExprEnum;
-  //TODO: numEnum: NumberExprEnum;
+  strEnum: StringExprEnum;
+  numEnum: NumberExprEnum;
 
   stringArray: string[];
   stringArray2: Array<string>;

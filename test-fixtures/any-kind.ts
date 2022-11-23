@@ -1,22 +1,22 @@
 interface AKindValue {
-    a: true;
+  a: true;
 }
 
 interface BKindValue {
-    b: true;
+  b: true;
 }
 
 interface KindEnvelope<T> {
-    type: string;
-    value: T;
+  type: string;
+  value: T;
 }
 
 interface AKind extends KindEnvelope<AKindValue> {
-    type: "a";
+  type: 'a';
 }
 
 interface BKind extends KindEnvelope<BKindValue> {
-    type: "b";
+  type: 'b';
 }
 
 /**

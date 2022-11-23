@@ -1,8 +1,9 @@
 // test to make sure we don't loop infinitely on import cycles.
-import { TestInterfaceRoot } from "./test-interface";
+// deno-lint-ignore no-unused-vars
+import { TestInterfaceRoot } from './test-interface';
 
 export interface ImportedInterface {
-    value: string,
+  value: string;
 }
 
 export type ImportedRecord1 = Record<string, string>;
