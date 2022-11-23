@@ -23,51 +23,48 @@ Reads all interfaces from input.ts files exports them to `outputdir/[InterfaceNa
 
 ## Output
 
-The example template outputs a gdscript 'model' class that extends `Reference` and has a constructor that accepts an optional `Dictionary` object, as well as an `update` method which allows the model to be updated in place.
+The example template outputs a gdscript *model* class that extends `Reference` and has a constructor that accepts an optional `Dictionary` object, as well as an `update` method which allows the model to be updated in place.
 
-* Properties of the incoming interface are mapped to additional 'model' class files and imported automatically with `preload`.
+* Properties of the incoming interface are mapped to additional *model* class files and imported automatically with `preload`.
 * Optional properties will be skipped (not updated in the model) when they are missing (undefined values in JSON are skipped during stringification)
 * Nullable properties will be assigned to null if the incoming value is null.
 
 ### Class Documentation
 
-`GeneratedClass.new(src: Dictionary = {}) -> GeneratedClass`:
-----
+#### `GeneratedClass.new(src: Dictionary = {}) -> GeneratedClass`:
+
 Create a new instance of the generated class. All properties from the TypeScript interface will be
 loaded out of the src `Dictionary` and properties of other `GeneratedClass` types will be instantiated.
 
 See `update()` for more details.
 
-`func update(src: Dictionary) -> void`:
-----
+#### `func update(src: Dictionary) -> void`:
 
 Pass an incoming json object to the update method or constructor to initialize the instance.
-    * Optional properties will remain unset. You can check their status by calling `.is_set(property_name)`
-    * Nullable properties may remain unset if the property type is a gdscript builtin type. Call `is_null(property_name)` to check if the property is null.
-    * Check `.is_initialized()` to see if the `.update()` method has been called yet with a non-empty object.
+* Optional properties will remain unset. You can check their status by calling `.is_set(property_name)`
+* Nullable properties may remain unset if the property type is a gdscript builtin type. Call `is_null(property_name)` to check if the property is null.
+* Check `.is_initialized()` to see if the `.update()` method has been called yet with a non-empty object.
 
-`func for_json() -> Dictionary`:
-----
+#### `func for_json() -> Dictionary`:
 
 Call this method to convert the object back into a `Dictionary` so it can be serialized to JSON data.
 
-`func is_set(property_name: String) -> bool`:
-----
-Check to see if an optional property was set.
-    * This method is neccesary to avoid overriding `_get` and `_set` and `_get_property_list`, which are kind of broken in Godot 3.
+#### `func is_set(property_name: String) -> bool`:
 
-`func is_null(property_name: String) -> bool`:
-----
+Check to see if an optional property was set. * This method is necessary to avoid overriding `_get` and `_set` and `_get_property_list`, which are kind of broken in Godot 3.
+
+#### `func is_null(property_name: String) -> bool`:
+
 Check to see if a nullable property was null.
-    * This method is neccesary because gdscript builtin types cannot be null, and there is no `Union` type in gdscript.
+* This method is necessary because gdscript builtin types cannot be null, and there is no `Union` type in gdscript.
 
-`func set_null(property_name: String) -> void`:
-----
+#### `func set_null(property_name: String) -> void`:
+
 Set a property to null.
-    * If the `typeof()` the property is `TYPE_OBJECT` or `TYPE_NIL` then that property will also be set to `null`.
+* If the `typeof()` the property is `TYPE_OBJECT` or `TYPE_NIL` then that property will also be set to `null`.
 
-`func is_initialized() -> bool`:
-----
+#### `func is_initialized() -> bool`:
+
 Returns true when `update()` has been called with a non-empty `Dictionary`
 
 ## Directives
@@ -77,9 +74,9 @@ Comments can contain directives to help out with conversion
 * `@typescript-to-gdscript-type: int|float|String`: Forces the type of a property.
 * `@typescript-to-gdscript-skip`: This type will not be imported, and will be completely ignored by this program.
 * `@typescript-to-gdscript-gd-impl`: This type will be imported, but the gdscript file will not be generated.
-    * This is useful for interface union types that would generate one type or another based on the kind property for example.
-    * See [any-kind.ts](./test-fixtures/any-kind.ts) for an example.
-    * The default template will import these types from the parent directory ('../')
+  * This is useful for interface union types that would generate one type or another based on the kind property for example.
+  * See [any-kind.ts](./test-fixtures/any-kind.ts) for an example.
+  * The default template will import these types from the parent directory ("../")
 
 ## Templates
 
@@ -184,9 +181,9 @@ func for_json() -> Dictionary:
 	result.strKey = str_key
 	result.floatKey = float_key
 	result.boolKey = bool_key
-	if is_set('optional_date'):
+	if is_set("optional_date"):
 		result.optionalDate = optional_date.for_json()
-	if is_set('nullable_optional_date'):
+	if is_set("nullable_optional_date"):
 		result.nullableOptionalDate = nullable_optional_date.for_json() if nullable_optional_date != null else null
 	result.date = date.for_json()
 	result.strLit = str_lit
@@ -238,6 +235,7 @@ func is_initialized() -> bool:
     * The values of literal types or literal type unions have comments but are not enforced.
 
 # Getting Started
+
 ## Set up Rust
 
 - Install rustup

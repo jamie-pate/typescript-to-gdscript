@@ -6,6 +6,7 @@ use convert_case::Case;
 use convert_case::Casing;
 use deno_ast::parse_module;
 use deno_ast::swc::ast::BindingIdent;
+use deno_ast::swc::ast::Lit;
 use deno_ast::swc::ast::Pat;
 use deno_ast::swc::ast::TsEnumDecl;
 use deno_ast::swc::ast::TsEnumMemberId;
@@ -421,22 +422,20 @@ fn convert(
                     context.pos.pop();
                 }
             }
-            ModuleItem::Stmt(Stmt::Decl(decl)) => {
-                if let Decl::TsInterface(intf) = decl {
-                    context.pos.push(intf.span.to_owned());
-                    dbg_pos(&context, "convert Decl");
-                    if !should_skip(&context) {
-                        context.stack.push(format!(
-                            "{:?}:{:?}, {}",
-                            filename,
-                            intf.id.to_id(),
-                            context.get_text(TERM_WIDTH)
-                        ));
-                        models.push(get_intf_model(&mut context, &intf));
-                        context.stack.pop();
-                    }
-                    context.pos.pop();
+            ModuleItem::Stmt(Stmt::Decl(Decl::TsInterface(intf))) => {
+                context.pos.push(intf.span.to_owned());
+                dbg_pos(&context, "convert Decl");
+                if !should_skip(&context) {
+                    context.stack.push(format!(
+                        "{:?}:{:?}, {}",
+                        filename,
+                        intf.id.to_id(),
+                        context.get_text(TERM_WIDTH)
+                    ));
+                    models.push(get_intf_model(&mut context, &intf));
+                    context.stack.pop();
                 }
+                context.pos.pop();
             }
             _ => {}
         }
@@ -468,12 +467,22 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
                     TsEnumMemberId::Str(str) => (&*str.value).to_string(),
                 },
                 value: if let Some(init_expr) = m.init.as_ref() {
-                    panic!(
-                        "Assigned enums not supported {:?} {:?}\n{}",
-                        id,
-                        init_expr,
-                        context.get_info()
-                    );
+                    if let Expr::Lit(lit_expr) = init_expr.as_ref() {
+                        resolve_lit_type(context, &lit_to_ts_lit(lit_expr))
+                            .literal
+                            .expect(&format!(
+                                "Expected a literal value for {:?}\n{}",
+                                lit_expr,
+                                context.get_info()
+                            ))
+                    } else {
+                        panic!(
+                            "Unsupported enum type not supported {:?} {:?}\n{}",
+                            id,
+                            init_expr,
+                            context.get_info()
+                        );
+                    }
                 } else {
                     i.to_string()
                 },
@@ -549,6 +558,7 @@ struct TypeResolution {
     nullable: bool,
     collection: Option<ModelVarCollection>,
     comment: Option<String>,
+    literal: Option<String>,
     gd_impl: bool,
 }
 
@@ -560,6 +570,7 @@ impl TypeResolution {
             nullable: false,
             collection: None,
             comment: None,
+            literal: None,
             gd_impl: false,
         }
     }
@@ -578,6 +589,7 @@ impl From<Ident> for TypeResolution {
             ctor_type: None,
             nullable: false,
             collection: None,
+            literal: None,
             comment: None,
             gd_impl: false,
         }
@@ -682,14 +694,11 @@ fn resolve_union_type(
                 );
             }
         }
-        // TODO: lousy hack, add a property to denote this?
         let literal_comments = all_types
             .iter()
-            .map(|rt| &rt.comment)
+            .map(|rt| rt.literal.as_deref())
             .flatten()
-            .filter(|c| c.starts_with("Literally "))
-            .map(|c| c.replace("Literally ", ""))
-            .collect::<Vec<String>>();
+            .collect::<Vec<&str>>();
         if literal_comments.len() == all_types.len() {
             a_type.comment = Some(format!("Literally {}", literal_comments.join(" | ")));
         } else if all_types.len() > 0 {
@@ -782,48 +791,70 @@ fn resolve_type(
             context
                 .stack
                 .push(format!("resolve TsLitType {:?}", lit_type));
-            let result = match (&lit_type.lit) {
-                TsLit::Number(number) => {
-                    let s = if let Some(atom) = &number.raw {
-                        atom.to_string()
-                    } else {
-                        number.value.to_string()
-                    };
-                    let mut result = if s.contains(".") {
-                        TypeResolution::new("float")
-                    } else {
-                        TypeResolution::new("int")
-                    };
-                    result.comment = Some(format!("Literally {}", s));
-                    result
-                }
-                TsLit::Str(str) => {
-                    let mut result = TypeResolution::new("String");
-                    result.comment = Some(format!("Literally \"{}\"", str.value));
-                    result
-                }
-                TsLit::Bool(bool) => {
-                    let mut result = TypeResolution::new("bool");
-                    result.comment = Some(format!("Literally {}", bool.value));
-                    result
-                }
-                TsLit::BigInt(big_int) => {
-                    let mut result = TypeResolution::new("int");
-                    result.comment = Some(format!("Literally {}", big_int.value));
-                    result
-                }
-                _ => panic!(
-                    "IDK what to do with this type {:#?}\n{}",
-                    ts_type,
-                    context.get_info()
-                ),
-            };
+            let result = resolve_lit_type(context, &lit_type.lit);
             context.stack.pop();
             result
         }
         _ => panic!(
             "IDK what to do with this type {:#?}\n{}",
             ts_type,
+            context.get_info()
+        ),
+    }
+}
+
+fn lit_to_ts_lit(ts_lit: &Lit) -> TsLit {
+    match ts_lit {
+        Lit::Num(number) => TsLit::Number(number.clone()),
+        Lit::Str(str) => TsLit::Str(str.clone()),
+        Lit::Bool(bool) => TsLit::Bool(bool.clone()),
+        Lit::BigInt(big_int) => TsLit::BigInt(big_int.clone()),
+        _ => panic!(
+            "Unsupported literal type conversion from Lit to TsLit: {:?}",
+            ts_lit
+        ),
+    }
+}
+
+fn resolve_lit_type(context: &ModuleContext, lit: &TsLit) -> TypeResolution {
+    match (lit) {
+        TsLit::Number(number) => {
+            let s = if let Some(atom) = &number.raw {
+                atom.to_string()
+            } else {
+                number.value.to_string()
+            };
+            let mut result = if s.contains(".") {
+                TypeResolution::new("float")
+            } else {
+                TypeResolution::new("int")
+            };
+            result.comment = Some(format!("Literally {}", &s));
+            result.literal = Some(s);
+            result
+        }
+        TsLit::Str(str) => {
+            let mut result = TypeResolution::new("String");
+            let str_literal = format!("\"{}\"", str.value);
+            result.comment = Some(format!("Literally {}", str_literal));
+            result.literal = Some(str_literal);
+            result
+        }
+        TsLit::Bool(bool) => {
+            let mut result = TypeResolution::new("bool");
+            result.comment = Some(format!("Literally {}", bool.value));
+            result.literal = Some(bool.value.to_string());
+            result
+        }
+        TsLit::BigInt(big_int) => {
+            let mut result = TypeResolution::new("int");
+            result.comment = Some(format!("Literally {}", big_int.value));
+            result.literal = Some(big_int.value.to_string());
+            result
+        }
+        _ => panic!(
+            "IDK what to do with this type {:#?}\n{}",
+            lit,
             context.get_info()
         ),
     }
@@ -1335,14 +1366,16 @@ mod tests {
 
     use deno_ast::{
         parse_module,
-        swc::ast::{Decl, ExportDecl, Module, ModuleDecl, ModuleItem, TsInterfaceDecl},
+        swc::ast::{
+            Decl, ExportDecl, Module, ModuleDecl, ModuleItem, Stmt, TsEnumDecl, TsInterfaceDecl,
+        },
         MediaType, ParseParams, ParsedSource, SourceTextInfo,
     };
 
     use crate::{
         get_intf_model,
         model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
-        ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
+        ts_enum_to_model_enum, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
     };
 
     const ts_intf_union: &'static str = "
@@ -1603,5 +1636,85 @@ mod tests {
             optAOfMemberOrNull.ctor.suffix.as_ref().unwrap(),
             " != null else null"
         );
+    }
+
+    #[test]
+    fn auto_enum() {
+        let src = "
+        enum Enum {
+            one, two, three
+        }
+        ";
+
+        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let mut e: Option<&TsEnumDecl> = None;
+        for node in module.body.iter() {
+            if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
+                context.pos.push(ts_enum.span);
+                e = Some(ts_enum);
+                break;
+            }
+        }
+        assert_eq!(e.is_some(), true);
+        if let Some(e) = e {
+            let model = ts_enum_to_model_enum(&context, e);
+            assert_eq!(model.members.len(), e.members.len());
+            assert_eq!(model.members.get(0).unwrap().value, "0");
+        }
+    }
+
+    #[test]
+    fn assign_enum() {
+        let src = "
+        enum Enum {
+            one=1, two=2, three=3
+        }
+        ";
+        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
+        let mut context = module_context(&test_context);
+        context.debug_print = true;
+        let module = context.parsed_source.module();
+        let mut e: Option<&TsEnumDecl> = None;
+        for node in module.body.iter() {
+            if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
+                context.pos.push(ts_enum.span);
+                e = Some(ts_enum);
+                break;
+            }
+        }
+        assert_eq!(e.is_some(), true);
+        if let Some(e) = e {
+            let model = ts_enum_to_model_enum(&context, e);
+            assert_eq!(model.members.len(), 3);
+            assert_eq!(model.members.get(0).unwrap().value, "1");
+        }
+    }
+
+    #[test]
+    fn assign_str_enum() {
+        let src = "
+        enum Enum {
+            one='one', two='two', three='three'
+        }
+        ";
+        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
+        let mut context = module_context(&test_context);
+        let module = context.parsed_source.module();
+        let mut e: Option<&TsEnumDecl> = None;
+        for node in module.body.iter() {
+            if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
+                context.pos.push(ts_enum.span);
+                e = Some(ts_enum);
+                break;
+            }
+        }
+        assert_eq!(e.is_some(), true);
+        if let Some(e) = e {
+            let model = ts_enum_to_model_enum(&context, e);
+            assert_eq!(model.members.len(), 3);
+            assert_eq!(model.members.get(0).unwrap().value, "\"one\"");
+        }
     }
 }

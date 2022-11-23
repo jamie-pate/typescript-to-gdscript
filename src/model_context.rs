@@ -129,7 +129,7 @@ impl ModelValueForJson {
         // TODO: add other builtin 'for_json' behaviors here
         let for_json_call = if !builtin { ".for_json()" } else { "" }.to_string();
         let (null_test_start, null_test_end) = if builtin {
-            (" if !is_null('", "')")
+            (" if !is_null(\"", "\")")
         } else {
             (" if ", " != null")
         };
@@ -329,7 +329,7 @@ impl ModelVarDescriptor {
         let mut indent_level = 0;
 
         if self.optional {
-            parts.push(format!("if is_set('{name}'):"));
+            parts.push(format!("if is_set(\"{name}\"):"));
             indent_level += 1;
         }
         if let Some(collection) = &self.collection {
@@ -339,7 +339,7 @@ impl ModelVarDescriptor {
             if collection.nullable {
                 parts.push(add_indent(
                     formatdoc! {"
-                        if is_null('{name}'):
+                        if is_null(\"{name}\"):
                         {ws}{dest_specifier} = null
                         else:"},
                     indent,
@@ -463,7 +463,7 @@ pub struct ModelContext {
 #[cfg(test)]
 mod tests {
     use convert_case::{Case, Casing};
-    use indoc::{indoc, formatdoc};
+    use indoc::{formatdoc, indoc};
 
     use crate::model_context::{ModelVarCollection, DEFAULT_INDENT};
 
@@ -538,7 +538,8 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true\n\
                 prop_name = Intf.new(src.propName)\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -553,7 +554,8 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true if src.propName != null else null\n\
                 prop_name = Intf.new(src.propName) if src.propName != null else null\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -568,7 +570,8 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true\n\
                 prop_name = src.propName\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -584,7 +587,8 @@ mod tests {
                 "\
                 __assigned_properties.prop_name = true if src.propName != null else null\n\
                 prop_name = src.propName if src.propName != null else \"\"\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -891,7 +895,8 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name.for_json()\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -905,7 +910,8 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name.for_json() if prop_name != null else null\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -919,7 +925,8 @@ mod tests {
             indent(
                 "\
                 result.propName = prop_name\
-            ".to_string()
+            "
+                .to_string()
             )
         );
     }
@@ -933,8 +940,9 @@ mod tests {
             rendered,
             indent(
                 "\
-                result.propName = prop_name if !is_null('prop_name') else null\
-            ".to_string()
+                result.propName = prop_name if !is_null(\"prop_name\") else null\
+            "
+                .to_string()
             )
         );
     }
@@ -946,7 +954,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
+                if is_set(\"prop_name\"):
                 {ws}result.propName = prop_name.for_json()\
             "})
         );
@@ -959,7 +967,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
+                if is_set(\"prop_name\"):
                 {ws}result.propName = prop_name.for_json() if prop_name != null else null\
             "})
         );
@@ -974,7 +982,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
+                if is_set(\"prop_name\"):
                 {ws}result.propName = prop_name\
             "})
         );
@@ -988,8 +996,8 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
-                {ws}result.propName = prop_name if !is_null('prop_name') else null\
+                if is_set(\"prop_name\"):
+                {ws}result.propName = prop_name if !is_null(\"prop_name\") else null\
             "})
         );
     }
@@ -1049,7 +1057,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null('prop_name'):
+                if is_null(\"prop_name\"):
                 {ws}result.propName = null
                 else:
                 {ws}result.propName = []
@@ -1073,7 +1081,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null('prop_name'):
+                if is_null(\"prop_name\"):
                 {ws}result.propName = null
                 else:
                 {ws}result.propName = {{}}
@@ -1097,7 +1105,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null('prop_name'):
+                if is_null(\"prop_name\"):
                 {ws}result.propName = null
                 else:
                 {ws}result.propName = []
@@ -1121,7 +1129,7 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null('prop_name'):
+                if is_null(\"prop_name\"):
                 {ws}result.propName = null
                 else:
                 {ws}result.propName = {{}}
@@ -1145,8 +1153,8 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
-                {ws}if is_null('prop_name'):
+                if is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
                 {ws}{ws}result.propName = null
                 {ws}else:
                 {ws}{ws}result.propName = []
@@ -1170,8 +1178,8 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
-                {ws}if is_null('prop_name'):
+                if is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
                 {ws}{ws}result.propName = null
                 {ws}else:
                 {ws}{ws}result.propName = {{}}
@@ -1197,8 +1205,8 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
-                {ws}if is_null('prop_name'):
+                if is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
                 {ws}{ws}result.propName = null
                 {ws}else:
                 {ws}{ws}result.propName = []
@@ -1222,8 +1230,8 @@ mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_set('prop_name'):
-                {ws}if is_null('prop_name'):
+                if is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
                 {ws}{ws}result.propName = null
                 {ws}else:
                 {ws}{ws}result.propName = {{}}
@@ -1233,5 +1241,4 @@ mod tests {
             "})
         );
     }
-
 }
