@@ -557,6 +557,7 @@ fn get_intf_model(
         }
         context.output_type_name = String::from(&*symbol);
     }
+    context.stack.push(format!("get_intf_model {}", context.output_type_name));
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
         .body
@@ -605,6 +606,7 @@ fn get_intf_model(
         }
     });
 
+    context.stack.pop();
     context.output_type_name = "".to_string();
     ModelContext {
         class_name: String::from(&*symbol),
@@ -1221,8 +1223,6 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                 context.inherit(relative_filepath.as_path(), module_path, parsed_source);
             extract_import_specifiers(&mut import_context, module);
             for node in module.body.iter() {
-                let t = format!("{:?}", node);
-
                 if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
                     import_context.pos.push(export.span.to_owned());
                     import_context.stack.push(format!(
@@ -1236,13 +1236,7 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                     ));
                     dbg_pos(&import_context, "import ExportDecl");
 
-                    if !should_skip(&context) {
-                        if let Some(r) = resolve_type_decl(&mut import_context, &export.decl, &id) {
-                            result = Some(r);
-                        }
-                    } else if context.debug_print {
-                        eprintln!("Skipping {}", context.get_text(TERM_WIDTH));
-                    }
+                    result = resolve_type_decl(&mut import_context, &export.decl, &id);
                     import_context.pos.pop();
                     import_context.stack.pop();
                 }
@@ -1253,8 +1247,8 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
 
             if result.is_none() {
                 panic!(
-                    "no type found for {:?} in {:?} imported modules\n{}",
-                    id,
+                    "no type found for {} in {:?} imported modules\n{}",
+                    id.0,
                     &relative_filepath,
                     context.get_info()
                 );
