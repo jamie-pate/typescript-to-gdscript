@@ -240,7 +240,11 @@ func is_initialized() -> bool:
 * Any Date typed values will require implementation of an `Iso8601Date` class which is not provided.
 * Validation is extremely limited
     * The values of literal types or literal type unions have comments but are not enforced.
-
+* Enums with string expressions for values are coverted to dictionaries since gdscript doesn't support that.
+* Union types:
+	* Unions containing JavaScript primitive types become untyped in gdscript. Currently there is no type checking on these
+	* Unions containing other types are not allowed (except X | null)
+* Type literal expressions are not allowed for properties or as the type of collection based properties. Since they are anonymous we can't generate a class for them
 # Getting Started
 
 ## Set up Rust

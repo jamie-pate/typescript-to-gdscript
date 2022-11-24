@@ -14,7 +14,10 @@ use deno_ast::{
             TsUnionOrIntersectionType, TsUnionType,
         },
         atoms::Atom,
-        common::{comments::Comments, serializer::Type, util::iter::IteratorExt, BytePos, Span},
+        common::{
+            comments::Comments, serializer::Type, util::iter::IteratorExt, BytePos, Span,
+            SyntaxContext,
+        },
     },
     MediaType, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
     SourceRangedForSpanned, SourceTextInfo,
@@ -38,6 +41,7 @@ use std::{
     fs::{create_dir_all, read_to_string, write},
     path::{self, Path, PathBuf},
     process::exit,
+    rc::Rc,
 };
 
 use crate::model_context::ModelEnumMember;
@@ -59,6 +63,8 @@ fn main() {
     let mut template_str: Option<String> = None;
     let mut src_files: Vec<PathBuf> = Vec::new();
 
+    let mut context = Context::new(debug_print, &DEFAULT_INDENT);
+
     for arg in args().skip(1) {
         // TODO: in parallel!
         if arg == "--debug-print" {
@@ -79,7 +85,7 @@ fn main() {
             "Failed to load template file {:?}",
             &template_filename
         ));
-        let template_indent = detect_indent(&template_str, debug_print);
+        context.indent = detect_indent(&template_str, debug_print);
         let mut template = TinyTemplate::new();
         template
             .add_template(TEMPLATE_NAME, &template_str)
@@ -95,32 +101,29 @@ fn main() {
             exit(1);
         }
         create_dir_all(&output_dir).expect(&format!("Creating directory {:?}", &output_dir));
-        let mut imports: HashMap<PathBuf, ParsedSource> = HashMap::new();
         let directory = current_dir().expect("current_dir failed somehow");
         let mut import_stack: Vec<PathBuf> = Vec::new();
         for filename in src_files.iter() {
             let canonical_filepath = canonical_module_filename(&directory, &filename);
             parse_recursive(
                 &mut import_stack,
-                &mut imports,
+                &mut context.imported_modules,
                 &canonical_filepath,
                 debug_print,
             );
         }
         if debug_print {
-            eprintln!("{} files parsed", imports.len());
+            eprintln!("{} files parsed", context.imported_modules.len());
         }
         for filename in src_files.iter() {
             let canonical_filepath = canonical_module_filename(&directory, &filename);
             convert(
-                &imports,
                 &output_dir,
                 &filename,
                 &canonical_filepath,
                 &template_filename,
                 &template,
-                &template_indent,
-                debug_print,
+                &mut context,
             );
         }
     } else {
@@ -182,7 +185,7 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
 
 fn parse_recursive(
     import_stack: &mut Vec<PathBuf>,
-    imported_modules: &mut HashMap<PathBuf, ParsedSource>,
+    imported_modules: &mut HashMap<PathBuf, Rc<ParsedSource>>,
     canonical_filepath: &Path,
     debug_print: bool,
 ) {
@@ -218,7 +221,7 @@ fn parse_recursive(
             }
         }
     }
-    imported_modules.insert(canonical_filepath.to_path_buf(), parsed_source);
+    imported_modules.insert(canonical_filepath.to_path_buf(), parsed_source.into());
     if debug_print {
         eprintln!("parsed imports from {:?}", canonical_filepath);
     }
@@ -228,98 +231,72 @@ fn parse_recursive(
 struct ModuleRegexes {
     gd_type: Regex,
 }
-struct ModuleContext<'a> {
-    regexes: ModuleRegexes,
+lazy_static! {
+    static ref REGEXES: ModuleRegexes = ModuleRegexes {
+        gd_type: Regex::new(&format!("{}:\\s+(\\w+)", TYPE_DIRECTIVE)).unwrap(),
+    };
+}
+
+struct Context {
+    debug_print: bool,
+    indent: String,
+    imported_modules: HashMap<PathBuf, Rc<ParsedSource>>,
+    stack: Vec<String>,
+}
+
+impl Context {
+    fn new(debug_print: bool, indent: &str) -> Self {
+        Context {
+            debug_print,
+            indent: indent.to_string(),
+            imported_modules: HashMap::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn get_info(&self, mc: &ModuleContext) -> String {
+        if self.debug_print {
+            format!("{}\nstack:\n\t{}", mc.get_info_(), self.stack.join("\n\t"))
+        } else {
+            mc.get_info_()
+        }
+    }
+}
+
+struct ModuleContext {
     type_directive_consumed: bool,
     pos: Vec<Span>,
     resolving_local: HashSet<Id>,
-    stack: Vec<String>,
-    debug_print: bool,
-    indent: String,
-    relative_filepath: &'a Path,
-    canonical_filepath: &'a Path,
     output_type_name: String,
-    parsed_source: &'a ParsedSource,
-    imported_modules: &'a HashMap<PathBuf, ParsedSource>,
+    relative_filepath: PathBuf,
+    canonical_filepath: PathBuf,
+    parsed_source: Rc<ParsedSource>,
     import_specifiers: HashMap<Id, PathBuf>,
 }
 
-impl<'a> ModuleContext<'a> {
+impl ModuleContext {
     fn new(
-        debug_print: bool,
-        indent: &str,
-        relative_filepath: &'a Path,
-        canonical_filepath: &'a Path,
-        parsed_source: &'a ParsedSource,
-        imported_modules: &'a HashMap<PathBuf, ParsedSource>,
-    ) -> Self {
-        ModuleContext::_new(
-            debug_print,
-            indent,
-            relative_filepath,
-            canonical_filepath,
-            parsed_source,
-            imported_modules,
-            None,
-            None,
-        )
-    }
-    fn _new(
-        debug_print: bool,
-        indent: &str,
-        relative_filepath: &'a Path,
-        canonical_filepath: &'a Path,
-        parsed_source: &'a ParsedSource,
-        imported_modules: &'a HashMap<PathBuf, ParsedSource>,
-        regexes: Option<&'a ModuleRegexes>,
-        stack: Option<&'a Vec<String>>,
+        relative_filepath: &Path,
+        canonical_filepath: &Path,
+        parsed_source: Rc<ParsedSource>,
     ) -> Self {
         ModuleContext {
-            regexes: ModuleRegexes {
-                gd_type: Regex::new(&format!("{}:\\s+(\\w+)", TYPE_DIRECTIVE)).unwrap(),
-            },
-            stack: if let Some(stack) = stack {
-                stack.to_owned()
-            } else {
-                Vec::new()
-            },
             output_type_name: "".into(),
             type_directive_consumed: false,
             pos: Vec::new(),
-            resolving_local: HashSet::new(),
-            debug_print,
-            indent: indent.to_string(),
-            relative_filepath,
-            canonical_filepath,
+            relative_filepath: relative_filepath.into(),
+            canonical_filepath: canonical_filepath.into(),
             parsed_source,
-            imported_modules,
+            resolving_local: HashSet::new(),
             import_specifiers: HashMap::new(),
         }
     }
 
-    fn inherit(
-        &'a self,
-        relative_filepath: &'a Path,
-        canonical_filepath: &'a Path,
-        parsed_source: &'a ParsedSource,
-    ) -> Self {
-        ModuleContext::_new(
-            self.debug_print,
-            &self.indent,
-            relative_filepath,
-            canonical_filepath,
-            parsed_source,
-            self.imported_modules,
-            Some(&self.regexes),
-            Some(&self.stack),
-        )
-    }
-
-    fn get_span_text(&'a self, span: &Span) -> &'a str {
+    fn get_span_text(&self, span: &Span) -> &str {
         self.parsed_source.text_info().range_text(&span.range())
     }
 
-    fn get_text(&'a self, limit: usize) -> &'a str {
+    fn get_text(&self, limit: usize) -> &str {
         let result = self.get_span_text(self.pos.last().unwrap());
         if limit > 0 && result.len() > limit {
             result.substring(0, limit)
@@ -328,63 +305,44 @@ impl<'a> ModuleContext<'a> {
         }
     }
 
-    fn get_span_info(&self, span: &Span, stack: bool) -> String {
-        let result = format!(
+    fn get_span_info(&self, span: &Span) -> String {
+        format!(
             "{}:{}\n{}",
             &self.relative_filepath.to_string_lossy(),
             &span
                 .range()
                 .start_line_fast(&self.parsed_source.text_info()),
             self.get_span_text(span)
-        );
-        if self.debug_print && stack {
-            let stack = self
-                .stack
-                .clone()
-                .into_iter()
-                .collect::<Vec<String>>()
-                .join("\n\t");
-            format!("{}\nstack:\n\t{}", result, stack)
-        } else {
-            result
-        }
+        )
     }
 
-    fn get_info(&self) -> String {
+    fn get_info_(&self) -> String {
         self.pos
             .iter()
-            .enumerate()
-            .map(|(i, span)| self.get_span_info(span, i == self.pos.len() - 1))
+            .map(|span| self.get_span_info(span))
             .collect::<Vec<_>>()
             .join("\n")
     }
 }
 
 fn convert(
-    imports: &HashMap<PathBuf, ParsedSource>,
     output_dir: &Path,
     filename: &Path,
     canonical_filepath: &Path,
     template_filename: &Path,
     template: &TinyTemplate,
-    template_indent: &str,
-    debug_print: bool,
+    global: &mut Context,
 ) {
-    let parsed_source = imports.get(canonical_filepath).expect(&format!(
-        "Module {:?} is missing but should previously have been parsed",
-        canonical_filepath
+    let parsed_source = Rc::clone(global.imported_modules.get(canonical_filepath).expect(
+        &format!(
+            "Module {:?} is missing but should previously have been parsed",
+            canonical_filepath
+        ),
     ));
-    let module = parsed_source.module();
     let mut stack: Vec<String> = Vec::new();
     let mut models: Vec<ModelContext> = Vec::new();
-    let mut context = ModuleContext::new(
-        debug_print,
-        template_indent,
-        filename,
-        canonical_filepath,
-        parsed_source,
-        imports,
-    );
+    let mut context = ModuleContext::new(filename, canonical_filepath, Rc::clone(&parsed_source));
+    let mut module = parsed_source.module();
     extract_import_specifiers(&mut context, module);
 
     for node in module.body.iter() {
@@ -393,32 +351,30 @@ fn convert(
                 let decl = &export.decl;
                 if let Decl::TsInterface(intf) = decl {
                     context.pos.push(export.span.to_owned());
-                    dbg_pos(&context, "convert ExportDecl");
-                    if !should_skip(&context) {
-                        context.stack.push(format!(
+                    if !should_skip(global, &context) {
+                        global.stack.push(format!(
                             "{:?}:{:?} {:?}",
                             filename,
                             intf.id.to_id(),
                             context.get_text(TERM_WIDTH)
                         ));
-                        models.push(get_intf_model(&mut context, &intf, None, true));
-                        context.stack.pop();
+                        models.push(get_intf_model(global, &mut context, &intf, None, None));
+                        global.stack.pop();
                     }
                     context.pos.pop();
                 }
             }
             ModuleItem::Stmt(Stmt::Decl(Decl::TsInterface(intf))) => {
                 context.pos.push(intf.span.to_owned());
-                dbg_pos(&context, "convert Decl");
-                if !should_skip(&context) {
-                    context.stack.push(format!(
+                if !should_skip(global, &context) {
+                    global.stack.push(format!(
                         "{:?}:{:?}, {}",
                         filename,
                         intf.id.to_id(),
                         context.get_text(TERM_WIDTH)
                     ));
-                    models.push(get_intf_model(&mut context, &intf, None, true));
-                    context.stack.pop();
+                    models.push(get_intf_model(global, &mut context, &intf, None, None));
+                    global.stack.pop();
                 }
                 context.pos.pop();
             }
@@ -441,7 +397,11 @@ fn convert(
     }
 }
 
-fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> ModelEnum {
+fn ts_enum_to_model_enum(
+    global: &Context,
+    context: &ModuleContext,
+    ts_enum: &TsEnumDecl,
+) -> ModelEnum {
     let id = ts_enum.id.to_id();
     let member_types = ts_enum
         .members
@@ -449,13 +409,16 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
         .map(|m| {
             if let Some(init_expr) = m.init.as_ref() {
                 if let Expr::Lit(lit_expr) = init_expr.as_ref() {
-                    (Some(resolve_lit_type(context, &lit_to_ts_lit(lit_expr))), m)
+                    (
+                        Some(resolve_lit_type(global, context, &lit_to_ts_lit(lit_expr))),
+                        m,
+                    )
                 } else {
                     panic!(
                         "Unsupported enum type not supported {:?} {:?}\n{}",
                         id,
                         init_expr,
-                        context.get_info()
+                        global.get_info(context)
                     );
                 }
             } else {
@@ -479,14 +442,14 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
         panic!(
             "Forbidden enum member types detected: {}\n{}",
             invalid_types.join(", "),
-            context.get_info()
+            global.get_info(context)
         );
     }
     if type_set.len() > 1 {
         panic!(
             "Mixed enum member types are not allowed: {}\n{}",
             type_set.into_iter().collect::<Vec<_>>().join(", "),
-            context.get_info()
+            global.get_info(context)
         );
     }
     ModelEnum {
@@ -510,7 +473,7 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
                     t.literal.clone().expect(&format!(
                         "Expected a literal value for {:?}\n{}",
                         m.init,
-                        context.get_info()
+                        global.get_info(context)
                     ))
                 } else {
                     i.to_string()
@@ -521,16 +484,20 @@ fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> Model
 }
 
 fn get_extends_intf_model(
+    global: &mut Context,
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
     expr: &TsExprWithTypeArgs,
+    extending: &Ident,
 ) -> ModelContext {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
-        let mut resolved = if let Some(t) = resolve_imported_specifier_type(context, &id) {
-            t
-        } else if let Some(t) = resolve_local_specifier_type(context, &id) {
-            t
+        global.stack.push(format!("Searching for {}", id.0));
+        let (mut resolved, mut import_context) = if let Some((t, import_context)) =
+            resolve_imported_specifier_type(global, context, &id)
+        {
+            (t, Some(import_context))
+        } else if let Some(t) = resolve_local_specifier_type(global, context, &id) {
+            (t, None)
         } else if &id.0 == "Omit" {
             let args = expr
                 .type_args
@@ -538,29 +505,39 @@ fn get_extends_intf_model(
                 .expect("Expect Omit to have type_args");
             let arg0 = args.params.get(0).unwrap();
 
-            let mut t = resolve_type(context, arg0);
-            let mut possible_imports: HashMap<String, ModelImportContext> = HashMap::new();
+            let mut t = resolve_type(global, context, arg0);
             t.omit = Some(
                 args.params
                     .iter()
                     .skip(1)
-                    .map(|k| resolve_type(context, k))
+                    .map(|k| resolve_type(global, context, k))
                     .collect(),
             );
-            t
+            (t, None)
         } else {
-            if context.debug_print {
+            if global.debug_print {
                 dbg!(expr);
             }
+            eprintln!(
+                "import_specifier for {:?}: {}",
+                id,
+                context
+                    .import_specifiers
+                    .get(&id)
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("not found")
+            );
             panic!(
-                "Couldn't resolve identifier that's extended {:?}\n{}",
-                id.0,
-                context.get_info()
+                "Couldn't resolve identifier {} that's extended\n{}",
+                String::from(&*id.0),
+                global.get_info(context)
             );
         };
-
-        get_intf_model(
-            context,
+        let mut intf_context = import_context.as_mut().unwrap_or(context);
+        intf_context.pos.push(resolved.pos);
+        let r = get_intf_model(
+            global,
+            intf_context,
             &resolved
                 .interface_decl
                 .expect("Interface decl should be here"),
@@ -572,39 +549,49 @@ fn get_extends_intf_model(
                         .collect::<HashSet<_>>(),
                 )
             }),
-            false,
-        )
+            Some(extending),
+        );
+        intf_context.pos.pop();
+        global.stack.pop();
+        r
     } else {
         panic!(
             "IDK what to do with this extends expression:{:#?}\n{}",
             expr,
-            context.get_info()
+            global.get_info(context)
         );
     }
 }
 
 fn get_intf_model(
+    global: &mut Context,
     context: &mut ModuleContext,
     intf: &TsInterfaceDecl,
     omit: Option<HashSet<String>>,
-    top_level: bool,
+    extending: Option<&Ident>,
 ) -> ModelContext {
     let (symbol, _tag) = intf.id.to_id();
-    if top_level {
+    let sstr = symbol.to_string();
+    if extending.is_none() {
         if !context.output_type_name.is_empty() {
             panic!("Nested top level get_intf_model")
         }
-        context.output_type_name = String::from(&*symbol);
+        context.output_type_name = sstr.clone();
     }
-    context
-        .stack
-        .push(format!("get_intf_model {}", context.output_type_name));
+    global.stack.push(format!(
+        "get_intf_model {}",
+        if let Some(extending) = extending {
+            format!("{} extending {}", sstr, extending)
+        } else {
+            sstr
+        }
+    ));
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
         .body
         .body
         .iter()
-        .map(|e| get_intf_model_var(context, &mut import_map, e))
+        .map(|e| get_intf_model_var(global, context, &mut import_map, e))
         // flatten filters out None!
         .flatten()
         .filter(|e| {
@@ -618,7 +605,7 @@ fn get_intf_model(
     let extended_descriptor_iterator = intf
         .extends
         .iter()
-        .map(|e| get_extends_intf_model(context, &mut import_map, e).var_descriptors)
+        .map(|e| get_extends_intf_model(global, context, e, &intf.id).var_descriptors)
         .flatten();
     let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
@@ -646,7 +633,7 @@ fn get_intf_model(
         }
     });
 
-    context.stack.pop();
+    global.stack.pop();
     context.output_type_name = "".to_string();
     ModelContext {
         class_name: String::from(&*symbol),
@@ -663,7 +650,7 @@ fn get_intf_model(
         state_vars: STATE_VARS.to_string(),
         vars: var_descriptors
             .iter()
-            .map(|d| d.render(&context.indent))
+            .map(|d| d.render(&global.indent))
             .collect(),
         var_descriptors,
         enums,
@@ -692,31 +679,10 @@ struct TypeResolution {
     enums: Vec<ModelEnum>,
     omit: Option<Vec<TypeResolution>>,
     imports: Vec<ModelImportContext>,
+    pos: Span,
 }
 
 impl TypeResolution {
-    fn new(name: &str) -> Self {
-        TypeResolution {
-            type_name: String::from(name),
-            ctor_type: None,
-            nullable: false,
-            collection: None,
-            comment: None,
-            literal: None,
-            gd_impl: false,
-            interface_decl: None,
-            omit: None,
-            enums: Vec::new(),
-            imports: Vec::new(),
-        }
-    }
-
-    fn gd_impl() -> Self {
-        let mut result = TypeResolution::new("");
-        result.gd_impl = true;
-        result
-    }
-
     fn add_import(&mut self, context: &ModuleContext) {
         if let Some(type_name) = &self.ctor_type {
             if &context.output_type_name != type_name && !is_builtin(type_name) {
@@ -729,10 +695,33 @@ impl TypeResolution {
         }
     }
 
+    fn gd_impl(span: &Span) -> Self {
+        let mut result = TypeResolution::new("", span);
+        result.gd_impl = true;
+        result
+    }
+
     fn merge_imports<'a, I>(&mut self, vals: &[TypeResolution]) {
         for t in vals {
             let mut clone = t.imports.clone();
             self.imports.append(&mut clone);
+        }
+    }
+
+    fn new(name: &str, span: &Span) -> Self {
+        TypeResolution {
+            type_name: String::from(name),
+            ctor_type: None,
+            nullable: false,
+            collection: None,
+            comment: None,
+            literal: None,
+            gd_impl: false,
+            interface_decl: None,
+            omit: None,
+            enums: Vec::new(),
+            imports: Vec::new(),
+            pos: span.clone(),
         }
     }
 
@@ -757,19 +746,25 @@ impl From<Ident> for TypeResolution {
             omit: None,
             enums: Vec::new(),
             imports: Vec::new(),
+            pos: ident.span.clone(),
         }
     }
 }
 
-fn resolve_type_ref(context: &mut ModuleContext, type_ref: &TsTypeRef) -> TypeResolution {
+fn resolve_type_ref(
+    global: &mut Context,
+    context: &mut ModuleContext,
+    type_ref: &TsTypeRef,
+) -> TypeResolution {
     if let Some(ident) = &type_ref.type_name.as_ident() {
         let id = ident.to_id();
-        context.stack.push(format!("resolve_type_ref {:?}", &id));
-        let mut resolved_type = if let Some(t) = resolve_imported_specifier_type(context, &id) {
-            t
-        } else {
-            resolve_local_specifier_type_or_builtin(context, type_ref, &id)
-        };
+        global.stack.push(format!("resolve_type_ref {:?}", &id));
+        let mut resolved_type =
+            if let Some((t, _)) = resolve_imported_specifier_type(global, context, &id) {
+                t
+            } else {
+                resolve_local_specifier_type_or_builtin(global, context, type_ref, &id)
+            };
         // Special case where we want to exclude the contents of this part of the tree
         // for example we encountered a GD_IMPL_DIRECTIVE on an interface union
         if resolved_type.gd_impl {
@@ -779,34 +774,38 @@ fn resolve_type_ref(context: &mut ModuleContext, type_ref: &TsTypeRef) -> TypeRe
             }
         }
         resolved_type.add_import(context);
-        context.stack.pop();
+        global.stack.pop();
         resolved_type
     } else {
         panic!(
             "IDK what to do with {:#?}\n{}",
             type_ref.type_name,
-            context.get_info()
+            global.get_info(context)
         );
     }
 }
 
-fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> TypeResolution {
+fn resolve_union_type(
+    global: &mut Context,
+    context: &mut ModuleContext,
+    union_type: &TsUnionType,
+) -> TypeResolution {
     if (union_type.types.len() < 2) {
         panic!(
             "At least two types required in a union type\n{}",
-            context.get_info()
+            global.get_info(context)
         );
     }
     let mut it = union_type.types.iter();
     let (a, b) = (it.next().unwrap(), it.next().unwrap());
-    context.stack.push(format!(
+    global.stack.push(format!(
         "resolve union_type ({:?} types: <\n\t{:?},\n\t{:?},\n\t ...?>)",
         union_type.types.len(),
         a,
         b
     ));
-    let mut a_type = resolve_type(context, &a);
-    let mut b_type = resolve_type(context, &b);
+    let mut a_type = resolve_type(global, context, &a);
+    let mut b_type = resolve_type(global, context, &b);
     let b_is_null = b_type.type_name == "null";
 
     let result = if union_type.types.len() == 2 && b_is_null {
@@ -823,9 +822,9 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
         let mut all_types: Vec<TypeResolution> = union_type
             .types
             .iter()
-            .map(|t| resolve_type(context, &t))
+            .map(|t| resolve_type(global, context, &t))
             .collect();
-        context.stack.push(format!(
+        global.stack.push(format!(
             "union_types: {:?}",
             all_types
                 .iter()
@@ -833,11 +832,11 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
                 .collect::<Vec<&String>>()
         ));
         let mut result = if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
-            if have_directive(context, GD_IMPL_DIRECTIVE) {
-                TypeResolution::gd_impl()
+            if have_directive(global, context, GD_IMPL_DIRECTIVE) {
+                TypeResolution::gd_impl(&union_type.span)
             } else {
                 if all_types.iter().all(|t| is_builtin(&t.type_name)) {
-                    let mut result = TypeResolution::new("any");
+                    let mut result = TypeResolution::new("any", &union_type.span);
                     result.comment = Some(
                         all_types
                             .iter()
@@ -859,15 +858,12 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
                         .map(|tr| tr.type_name.clone())
                         .collect::<Vec<String>>();
                     let pos = context.pos.last().unwrap();
-                    if context.debug_print {
-                        dbg_pos(context, "Union");
-                    }
                     panic!(
                         "Unsupported type, union types must all have the same godot type unless \
                         you supply {} directive or they must all be builtin types. {:?}\n{:#?}",
                         GD_IMPL_DIRECTIVE,
                         all_types,
-                        context.get_info()
+                        global.get_info(context)
                     );
                 }
             }
@@ -892,29 +888,33 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
             );
         }
         result.take_imports(all_types.as_mut_slice());
-        context.stack.pop();
+        global.stack.pop();
         result
     };
-    context.stack.pop();
+    global.stack.pop();
     result
 }
 
 // type name, ctor, collection, comment
-fn resolve_type(context: &mut ModuleContext, ts_type: &TsType) -> TypeResolution {
+fn resolve_type(
+    global: &mut Context,
+    context: &mut ModuleContext,
+    ts_type: &TsType,
+) -> TypeResolution {
     match (ts_type) {
         TsType::TsTypeRef(type_ref) => {
-            context
+            global
                 .stack
                 .push(format!("resolve type_ref {:?}", type_ref.type_name));
-            let result = resolve_type_ref(context, &type_ref);
-            context.stack.pop();
+            let result = resolve_type_ref(global, context, &type_ref);
+            global.stack.pop();
             result
         }
         TsType::TsArrayType(array_type) => {
-            context
+            global
                 .stack
                 .push(format!("resolve array_type {:?}", array_type));
-            let mut result = resolve_type(context, &array_type.elem_type);
+            let mut result = resolve_type(global, context, &array_type.elem_type);
             let ctor_type = result.type_name;
             result.type_name = "Array".to_string();
             result.collection = Some(ModelVarCollection {
@@ -924,53 +924,56 @@ fn resolve_type(context: &mut ModuleContext, ts_type: &TsType) -> TypeResolution
                 nullable: false,
             });
             result.ctor_type = Some(ctor_type);
-            context.stack.pop();
+            global.stack.pop();
             result
         }
         TsType::TsKeywordType(kw_type) => {
-            context
+            global
                 .stack
                 .push(format!("resolve keyword_type {:?}", kw_type));
             let mut result = match (kw_type.kind) {
-                TsKeywordTypeKind::TsNumberKeyword => TypeResolution::new("float"),
+                TsKeywordTypeKind::TsNumberKeyword => TypeResolution::new("float", &kw_type.span),
                 // Godot 3 uses 64 bit ints in 64 bit builds but probably we shouldn't use this type anyways, idk
-                TsKeywordTypeKind::TsBigIntKeyword => TypeResolution::new("int"),
-                TsKeywordTypeKind::TsBooleanKeyword => TypeResolution::new("bool"),
-                TsKeywordTypeKind::TsStringKeyword => TypeResolution::new("String"),
+                TsKeywordTypeKind::TsBigIntKeyword => TypeResolution::new("int", &kw_type.span),
+                TsKeywordTypeKind::TsBooleanKeyword => TypeResolution::new("bool", &kw_type.span),
+                TsKeywordTypeKind::TsStringKeyword => TypeResolution::new("String", &kw_type.span),
                 // used internally, probably not useful though
-                TsKeywordTypeKind::TsNullKeyword => TypeResolution::new("null"),
-                TsKeywordTypeKind::TsAnyKeyword => TypeResolution::new("any"),
+                TsKeywordTypeKind::TsNullKeyword => TypeResolution::new("null", &kw_type.span),
+                TsKeywordTypeKind::TsAnyKeyword => TypeResolution::new("any", &kw_type.span),
                 kind => panic!(
                     "IDK what to do with keyword type {:#?}\n{}",
                     kind,
-                    context.get_info()
+                    global.get_info(context)
                 ),
             };
             result = update_resolve_from_comments(context, result);
-            context.stack.pop();
+            global.stack.pop();
             result
         }
         TsType::TsUnionOrIntersectionType(ui_type) => {
-            context
+            global
                 .stack
                 .push("resolve union_or_intersection_type".into());
             let result = match ui_type {
                 TsUnionOrIntersectionType::TsUnionType(union_type) => {
-                    resolve_union_type(context, union_type)
+                    resolve_union_type(global, context, union_type)
                 }
                 TsUnionOrIntersectionType::TsIntersectionType(_) => {
-                    panic!("Intersection types are not allowed\n{}", context.get_info());
+                    panic!(
+                        "Intersection types are not allowed\n{}",
+                        global.get_info(context)
+                    );
                 }
             };
-            context.stack.pop();
+            global.stack.pop();
             result
         }
         TsType::TsLitType(lit_type) => {
-            context
+            global
                 .stack
                 .push(format!("resolve TsLitType {:?}", lit_type));
-            let result = resolve_lit_type(context, &lit_type.lit);
-            context.stack.pop();
+            let result = resolve_lit_type(global, context, &lit_type.lit);
+            global.stack.pop();
             result
         }
         // TODO: add array length check?
@@ -978,14 +981,14 @@ fn resolve_type(context: &mut ModuleContext, ts_type: &TsType) -> TypeResolution
             let elem_types = tuple_type
                 .elem_types
                 .iter()
-                .map(|t| resolve_type(context, &t.ty))
+                .map(|t| resolve_type(global, context, &t.ty))
                 .collect::<Vec<_>>();
             let mut result = elem_types.get(0).unwrap().clone();
             if !elem_types.iter().all(|t| t.type_name == result.type_name) {
                 panic!(
                     "Only homogenous tuple types are allowed {:#?}\n{}",
                     tuple_type.elem_types,
-                    context.get_info()
+                    global.get_info(context)
                 );
             }
             result.collection = Some(ModelVarCollection {
@@ -996,10 +999,18 @@ fn resolve_type(context: &mut ModuleContext, ts_type: &TsType) -> TypeResolution
             });
             result
         }
+        TsType::TsTypeLit(type_lit) => {
+            panic!(
+                "Type literals are forbidden: \"{}\"\n\
+                Property or collection types must be a named interface: \n{}",
+                context.get_span_text(&type_lit.span),
+                global.get_info(context)
+            );
+        }
         _ => panic!(
             "IDK what to do with this type {:#?}\n{}",
             ts_type,
-            context.get_info()
+            global.get_info(context)
         ),
     }
 }
@@ -1017,7 +1028,7 @@ fn lit_to_ts_lit(ts_lit: &Lit) -> TsLit {
     }
 }
 
-fn resolve_lit_type(context: &ModuleContext, lit: &TsLit) -> TypeResolution {
+fn resolve_lit_type(global: &Context, context: &ModuleContext, lit: &TsLit) -> TypeResolution {
     match (lit) {
         TsLit::Number(number) => {
             let s = if let Some(atom) = &number.raw {
@@ -1026,29 +1037,29 @@ fn resolve_lit_type(context: &ModuleContext, lit: &TsLit) -> TypeResolution {
                 number.value.to_string()
             };
             let mut result = if s.contains(".") {
-                TypeResolution::new("float")
+                TypeResolution::new("float", &number.span)
             } else {
-                TypeResolution::new("int")
+                TypeResolution::new("int", &number.span)
             };
             result.comment = Some(format!("Literally {}", &s));
             result.literal = Some(s);
             result
         }
         TsLit::Str(str) => {
-            let mut result = TypeResolution::new("String");
+            let mut result = TypeResolution::new("String", &str.span);
             let str_literal = format!("\"{}\"", str.value);
             result.comment = Some(format!("Literally {}", str_literal));
             result.literal = Some(str_literal);
             result
         }
         TsLit::Bool(bool) => {
-            let mut result = TypeResolution::new("bool");
+            let mut result = TypeResolution::new("bool", &bool.span);
             result.comment = Some(format!("Literally {}", bool.value));
             result.literal = Some(bool.value.to_string());
             result
         }
         TsLit::BigInt(big_int) => {
-            let mut result = TypeResolution::new("int");
+            let mut result = TypeResolution::new("int", &big_int.span);
             result.comment = Some(format!("Literally {}", big_int.value));
             result.literal = Some(big_int.value.to_string());
             result
@@ -1056,12 +1067,13 @@ fn resolve_lit_type(context: &ModuleContext, lit: &TsLit) -> TypeResolution {
         _ => panic!(
             "IDK what to do with this type {:#?}\n{}",
             lit,
-            context.get_info()
+            global.get_info(context)
         ),
     }
 }
 
 fn get_intf_model_var(
+    global: &mut Context,
     context: &mut ModuleContext,
     imports: &mut HashMap<String, ModelImportContext>,
     type_element: &TsTypeElement,
@@ -1073,25 +1085,25 @@ fn get_intf_model_var(
             None
         };
 
-        if context.debug_print {
+        if global.debug_print {
             dbg!(&src_name);
         }
         let type_ann = prop_sig.type_ann.as_ref().expect(&format!(
             "IDK what to do with this type {:#?}\n{}",
             prop_sig,
-            context.get_info()
+            global.get_info(context)
         ));
         let empty = String::from("");
-        context.stack.push(format!(
+        global.stack.push(format!(
             "get_intf_model_var {:?} {:?}",
             &src_name.as_ref().unwrap_or(&empty),
             context.get_text(TERM_WIDTH)
         ));
         context.pos.push(prop_sig.span);
         context.type_directive_consumed = false;
-        let resolved = resolve_type(context, &*type_ann.type_ann);
+        let resolved = resolve_type(global, context, &*type_ann.type_ann);
         context.pos.pop();
-        context.stack.pop();
+        global.stack.pop();
         if let Some(src_name) = src_name {
             let (ctor, for_json) = if let Some(ctor_type) = resolved.ctor_type {
                 (
@@ -1136,25 +1148,30 @@ fn get_intf_model_var(
             });
         }
     }
-    if context.debug_print {
+    if global.debug_print {
         dbg!(type_element);
     }
     return None;
 }
 
-fn resolve_local_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<TypeResolution> {
+fn resolve_local_specifier_type(
+    global: &mut Context,
+    context: &mut ModuleContext,
+    id: &Id,
+) -> Option<TypeResolution> {
     let mut decl_resolved: Option<TypeResolution> = None;
-    context
+    global
         .stack
         .push(format!("resolve_local_specifier_type {:?}", id));
+    let parsed_source = Rc::clone(&context.parsed_source);
     if !context.resolving_local.contains(&id) {
         context.resolving_local.insert(id.clone());
-        for node in context.parsed_source.module().body.iter() {
+        for node in parsed_source.module().body.iter() {
             match node {
                 ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
                     context.pos.push(export.span.to_owned());
                     let decl = &export.decl;
-                    let resolved = resolve_type_decl(context, &decl, &id);
+                    let resolved = resolve_type_decl(global, context, &decl, &id);
                     if let Some(mut r) = resolved {
                         r.add_import(context);
                         decl_resolved = Some(r);
@@ -1165,7 +1182,7 @@ fn resolve_local_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<
                     }
                 }
                 ModuleItem::Stmt(Stmt::Decl(decl)) => {
-                    let resolved = resolve_type_decl(context, &decl, &id);
+                    let resolved = resolve_type_decl(global, context, &decl, &id);
                     if let Some(mut r) = resolved {
                         r.add_import(context);
                         decl_resolved = Some(r);
@@ -1179,16 +1196,18 @@ fn resolve_local_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<
             panic!("Id {:?} should have been resolving but it's gone", *id);
         }
     }
-    context.stack.pop();
+    global.stack.pop();
     decl_resolved
 }
 
 fn resolve_local_specifier_type_or_builtin(
+    global: &mut Context,
     context: &mut ModuleContext,
     type_ref: &TsTypeRef,
     id: &Id,
 ) -> TypeResolution {
-    let mut decl_resolved: Option<TypeResolution> = resolve_local_specifier_type(context, id);
+    let mut decl_resolved: Option<TypeResolution> =
+        resolve_local_specifier_type(global, context, id);
     // if we were already resolving a type that hasn't been imported
     // or we just can't find the type then maybe it's a TypeScript builtin?
     // TODO: is there a deno_ast helper for these?
@@ -1197,7 +1216,7 @@ fn resolve_local_specifier_type_or_builtin(
         "Date" => {
             // gd_impl type Iso8601Date.gd must be provided
             // TODO: create reference implementation gdscript code?
-            let mut result = TypeResolution::gd_impl();
+            let mut result = TypeResolution::gd_impl(&type_ref.span);
             result.type_name = ISO_DATE_TYPE_NAME.to_string();
             result.ctor_type = Some(result.type_name.clone());
             result
@@ -1206,11 +1225,12 @@ fn resolve_local_specifier_type_or_builtin(
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
                 type_ref.type_params.as_ref().and_then(|p| p.params.get(1))
             {
-                Some(resolve_type(context, &prop_type))
+                Some(resolve_type(global, context, &prop_type))
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::new("Dictionary"));
+            let mut result =
+                ctor_type.unwrap_or_else(|| TypeResolution::new("Dictionary", &type_ref.span));
             result.collection = Some(ModelVarCollection {
                 init: "{}".to_string(),
                 is_array: false,
@@ -1223,11 +1243,12 @@ fn resolve_local_specifier_type_or_builtin(
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
                 type_ref.type_params.as_ref().and_then(|p| p.params.get(0))
             {
-                Some(resolve_type(context, &prop_type))
+                Some(resolve_type(global, context, &prop_type))
             } else {
                 None
             };
-            let mut result = ctor_type.unwrap_or_else(|| TypeResolution::new("Array"));
+            let mut result =
+                ctor_type.unwrap_or_else(|| TypeResolution::new("Array", &type_ref.span));
             result.collection = Some(ModelVarCollection {
                 init: "[]".to_string(),
                 is_array: true,
@@ -1237,39 +1258,44 @@ fn resolve_local_specifier_type_or_builtin(
             result
         }
         _ => {
-            if context.debug_print {
+            if global.debug_print {
                 dbg!(type_ref);
             }
             panic!(
-                "Unable to resolve type {} while exporting {:?}:{}.\n\
+                "Unable to resolve type {} while exporting {:?}.\n\
                 \tIs it a built in type or generic type parameter?\n\
                 \tYou can prefix {} with a comment containing {} or {} to skip this type.
                 \n{}",
                 &id.0,
                 context.relative_filepath,
                 context.output_type_name,
-                context.output_type_name,
                 SKIP_DIRECTIVE,
                 GD_IMPL_DIRECTIVE,
-                context.get_info()
+                global.get_info(context)
             )
         }
     });
-    context.stack.pop();
+    global.stack.pop();
     result
 }
 fn print_type_of<T>(_: &T) {
     println!("{}", std::any::type_name::<T>())
 }
 // TODO: resolve specifiers across modules until we find one that has @typescript-to-gdscript-type: int or something?
-fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<TypeResolution> {
-    let mut result: Option<TypeResolution> = None;
-    if let Some(module_path) = context.import_specifiers.get(id) {
-        context.stack.push(format!(
+fn resolve_imported_specifier_type<'a>(
+    global: &mut Context,
+    context: &'a ModuleContext,
+    id: &Id,
+) -> Option<(TypeResolution, ModuleContext)> {
+    let mut result: Option<(TypeResolution, ModuleContext)> = None;
+    let path = context.import_specifiers.get(id).to_owned();
+    if let Some(module_path) = path {
+        global.stack.push(format!(
             "resolve imported type_ref {:?} -> ${:?}",
             id, module_path
         ));
-        if let Some(parsed_source) = context.imported_modules.get(module_path) {
+        if let Some(parsed_source) = global.imported_modules.get(module_path) {
+            let parsed_source = Rc::clone(parsed_source);
             let dir = context.canonical_filepath.parent().expect(&format!(
                 "Expected {:?} to have a parent",
                 &context.canonical_filepath
@@ -1279,18 +1305,18 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                 module_path,
                 context.canonical_filepath.parent()
             ));
-            context
+            global
                 .stack
                 .push(format!("found parsed module {:?}", &relative_filepath));
-            let mut import_specifiers: HashMap<Id, PathBuf> = HashMap::new();
-            let module = parsed_source.module();
             let mut import_context =
-                context.inherit(relative_filepath.as_path(), module_path, parsed_source);
+                ModuleContext::new(&relative_filepath, module_path, Rc::clone(&parsed_source));
+            let module = parsed_source.module();
             extract_import_specifiers(&mut import_context, module);
+            let mut resolved: Option<TypeResolution> = None;
             for node in module.body.iter() {
                 if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) = node {
                     import_context.pos.push(export.span.to_owned());
-                    import_context.stack.push(format!(
+                    global.stack.push(format!(
                         "imported export decl {:?} {}",
                         relative_filepath,
                         import_context
@@ -1299,33 +1325,34 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                             .take(180)
                             .collect::<String>()
                     ));
-                    dbg_pos(&import_context, "import ExportDecl");
 
-                    result = resolve_type_decl(&mut import_context, &export.decl, &id);
+                    resolved = resolve_type_decl(global, &mut import_context, &export.decl, &id);
                     import_context.pos.pop();
-                    import_context.stack.pop();
+                    global.stack.pop();
                 }
-                if result.is_some() {
+                if resolved.is_some() {
                     break;
                 }
             }
-
-            if result.is_none() {
+            result = if let Some(resolved) = resolved {
+                Some((resolved, import_context))
+            } else {
                 panic!(
                     "no type found for {} in {:?} imported modules\n{}",
                     id.0,
                     &relative_filepath,
-                    context.get_info()
+                    global.get_info(context)
                 );
-            }
-            context.stack.pop();
+            };
+            global.stack.pop();
         } else {
             panic!(
                 "Expected to be able to resolve {:?} in imported modules {:#?}",
-                id, context.stack
+                id,
+                global.get_info(context)
             );
         }
-        context.stack.pop();
+        global.stack.pop();
     }
     result
 }
@@ -1351,6 +1378,7 @@ fn extract_import_specifiers(context: &mut ModuleContext, module: &Module) {
 }
 
 fn resolve_type_decl(
+    global: &mut Context,
     context: &mut ModuleContext,
     decl: &Decl,
     // if this id is supplied, only match declarations for this id's symbol
@@ -1361,13 +1389,13 @@ fn resolve_type_decl(
         Decl::TsTypeAlias(alias) => {
             result = if match_id.0 == alias.id.to_id().0 {
                 context.pos.push(alias.span.to_owned());
-                context.stack.push(format!(
+                global.stack.push(format!(
                     "resolve_type_decl:TsTypeAlias {}",
                     alias.id.to_id().0
                 ));
-                let mut result = resolve_type(context, &alias.type_ann);
+                let mut result = resolve_type(global, context, &alias.type_ann);
                 result.add_import(context);
-                context.stack.pop();
+                global.stack.pop();
                 context.pos.pop();
                 Some(result)
             } else {
@@ -1396,10 +1424,10 @@ fn resolve_type_decl(
                     Create an interface and have the class implement that interface instead\n\
                     {}",
                     id.0,
-                    context.get_info()
+                    global.get_info(context)
                 );
             } else {
-                if context.debug_print {
+                if global.debug_print {
                     eprintln!("Skip Class Decl {:?}", id.0);
                 }
             }
@@ -1408,7 +1436,7 @@ fn resolve_type_decl(
             // TODO: check to make sure the match id isn't in this list and panic if it is
             let names: Vec<Option<&BindingIdent>> =
                 var_decl.decls.iter().map(|d| d.name.as_ident()).collect();
-            if context.debug_print {
+            if global.debug_print {
                 eprintln!("Skip Var Decl {:?}", names);
             }
         }
@@ -1420,38 +1448,41 @@ fn resolve_type_decl(
                     Conversion of function declarations is unsupported.\n\
                     Create an interface and have the class implement that interface instead\n\
                     {}",
-                    context.get_info()
+                    global.get_info(context)
                 );
             } else {
-                if context.debug_print {
+                if global.debug_print {
                     eprintln!("Skip Class Decl {:?}", id.0);
                 }
             }
         }
         Decl::TsEnum(ts_enum) => {
             if match_id.0 == ts_enum.id.to_id().0 {
-                let enum_model = ts_enum_to_model_enum(context, ts_enum);
-                let mut resolved = TypeResolution::new(if enum_model.have_string_members {
-                    "String"
-                } else {
-                    "int"
-                });
+                let enum_model = ts_enum_to_model_enum(global, context, ts_enum);
+                let mut resolved = TypeResolution::new(
+                    if enum_model.have_string_members {
+                        "String"
+                    } else {
+                        "int"
+                    },
+                    &ts_enum.span,
+                );
                 resolved.enums.push(enum_model);
                 result = Some(resolved);
             }
         }
         _ => {
             dbg!(decl);
-            panic!("IDK {}", context.get_info());
+            panic!("IDK {}", global.get_info(context));
         }
     }
     result
 }
 
-fn should_skip(context: &ModuleContext) -> bool {
+fn should_skip(global: &Context, context: &ModuleContext) -> bool {
     for directive in [SKIP_DIRECTIVE, GD_IMPL_DIRECTIVE].into_iter() {
-        if have_directive(context, directive) {
-            if context.debug_print {
+        if have_directive(global, context, directive) {
+            if global.debug_print {
                 eprintln!(
                     "Skipping due to {} directive: {:?}",
                     GD_IMPL_DIRECTIVE,
@@ -1464,12 +1495,12 @@ fn should_skip(context: &ModuleContext) -> bool {
     false
 }
 
-fn have_directive(context: &ModuleContext, directive: &str) -> bool {
+fn have_directive(global: &Context, context: &ModuleContext, directive: &str) -> bool {
     let c = context.parsed_source.comments().as_single_threaded();
     for span in context.pos.iter().rev() {
         if let Some(comments) = c.get_leading(span.lo) {
             for c in comments.iter() {
-                if (context.debug_print) {
+                if (global.debug_print) {
                     eprintln!(
                         "Checking comment for {}: {:?} on {}",
                         directive,
@@ -1495,12 +1526,7 @@ fn update_resolve_from_comments(
     let span = context.pos.last().unwrap();
     if let Some(comments) = c.get_leading(span.lo) {
         for c in comments.iter() {
-            if let Some(gd_type) = context
-                .regexes
-                .gd_type
-                .captures(&c.text)
-                .and_then(|c| c.get(1))
-            {
+            if let Some(gd_type) = REGEXES.gd_type.captures(&c.text).and_then(|c| c.get(1)) {
                 // we only want to consume the type directive once for a given property signature...
                 // maybe we want to change this to a number later and allow multiple directives
                 if !context.type_directive_consumed {
@@ -1512,28 +1538,6 @@ fn update_resolve_from_comments(
         }
     }
     result
-}
-
-fn dbg_pos(context: &ModuleContext, comment: &str) {
-    if context.debug_print {
-        let pos = context.pos.last().unwrap();
-        let pos_src = context.parsed_source.text_info().range_text(&pos.range());
-        eprintln!(
-            "Setting comment pos {},  {:?}:\n{:#?}\n{:#?}",
-            comment,
-            pos,
-            context
-                .parsed_source
-                .comments()
-                .as_single_threaded()
-                .get_leading(pos.lo)
-                .iter()
-                .map(|c| c.iter().map(|cc| &cc.text))
-                .flatten()
-                .collect::<Vec<&Atom>>(),
-            pos_src
-        )
-    }
 }
 
 fn detect_indent(template_str: &str, debug_print: bool) -> String {
@@ -1567,8 +1571,9 @@ fn detect_indent(template_str: &str, debug_print: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{borrow::Borrow, collections::HashMap, path::PathBuf, rc::Rc};
 
+    use cool_asserts::assert_panics;
     use deno_ast::{
         parse_module,
         swc::{
@@ -1583,7 +1588,7 @@ mod tests {
     use crate::{
         extract_import_specifiers, get_intf_model,
         model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
-        ts_enum_to_model_enum, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
+        ts_enum_to_model_enum, Context, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
     };
 
     const ts_intf_union: &'static str = "
@@ -1601,8 +1606,15 @@ mod tests {
         }
     ";
     struct TestContext {
-        imports: HashMap<PathBuf, ParsedSource>,
+        imports: HashMap<PathBuf, Rc<ParsedSource>>,
         filename: PathBuf,
+    }
+
+    impl TestContext {
+        fn add_imports_from(&mut self, other: &TestContext) {
+            self.imports
+                .extend(other.imports.iter().map(|(k, v)| (k.clone(), Rc::clone(v))));
+        }
     }
 
     fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
@@ -1615,24 +1627,38 @@ mod tests {
             maybe_syntax: None,
             scope_analysis: false,
         })
-        .unwrap();
+        .expect(&format!("Unable to parse {:?}", filename));
 
-        let mut imports: HashMap<PathBuf, ParsedSource> = HashMap::new();
-        imports.insert(filename.to_path_buf(), parsed_source);
+        let mut imports: HashMap<PathBuf, Rc<ParsedSource>> = HashMap::new();
+        imports.insert(filename.to_path_buf(), Rc::new(parsed_source));
         let mut model: Option<ModelContext> = None;
         TestContext { imports, filename }
     }
 
-    fn module_context<'a>(test_context: &'a TestContext) -> ModuleContext<'a> {
-        let parsed_source_ref = test_context.imports.get(&test_context.filename).unwrap();
-        ModuleContext::new(
-            false,
-            DEFAULT_INDENT,
+    fn module_context(test_context: &TestContext) -> (Context, ModuleContext, Rc<ParsedSource>) {
+        let mut global = Context::new(false, &DEFAULT_INDENT);
+        global.imported_modules.extend(
+            test_context
+                .imports
+                .iter()
+                .map(|(k, v)| (k.clone(), Rc::clone(v))),
+        );
+        let parsed_source = test_context.imports.get(&test_context.filename).unwrap();
+        let mut context = ModuleContext::new(
             &test_context.filename,
             &test_context.filename,
-            parsed_source_ref,
-            &test_context.imports,
-        )
+            Rc::clone(parsed_source),
+        );
+        (global, context, Rc::clone(parsed_source))
+    }
+
+    fn get_mc_intf_export<'a>(
+        context: &mut ModuleContext,
+        parsed_source: &'a Rc<ParsedSource>,
+    ) -> (&'a Box<TsInterfaceDecl>, &'a ExportDecl) {
+        let module = parsed_source.module();
+        extract_import_specifiers(context, module);
+        get_first_exported_intf(module)
     }
 
     fn get_exported_intfs(module: &Module) -> Vec<(&Box<TsInterfaceDecl>, &ExportDecl)> {
@@ -1666,12 +1692,11 @@ mod tests {
     fn iso_date_type() {
         let src = "export interface Intf { date: Date }";
         let mut test_context = parse_from_string("iso-date-type.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         let imports: Vec<ModelImportContext> = model
             .imports
             .into_iter()
@@ -1695,12 +1720,11 @@ mod tests {
     fn gd_impl_for_intf_union() {
         let src = ts_intf_union.replace("{{}}", &GD_IMPL_DIRECTIVE);
         let mut test_context = parse_from_string("any-kind.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         let import = model
             .imports
             .iter()
@@ -1718,12 +1742,11 @@ mod tests {
     #[should_panic]
     fn no_gd_impl_for_intf_union() {
         let mut test_context = parse_from_string("any-kind.ts", ts_intf_union);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
     }
 
     #[test]
@@ -1741,12 +1764,11 @@ mod tests {
             TYPE_DIRECTIVE
         );
         let mut test_context = parse_from_string("nullable-primitives.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -1795,12 +1817,11 @@ mod tests {
             }
         ";
         let mut test_context = parse_from_string("nullable-collections.ts", src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -1857,9 +1878,9 @@ mod tests {
         }
         ";
 
-        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
+        let mut test_context = parse_from_string("auto-enum.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let module = parsed_source.module();
         let mut e: Option<&TsEnumDecl> = None;
         for node in module.body.iter() {
             if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
@@ -1870,7 +1891,7 @@ mod tests {
         }
         assert_eq!(e.is_some(), true);
         if let Some(e) = e {
-            let model = ts_enum_to_model_enum(&context, e);
+            let model = ts_enum_to_model_enum(&global, &context, e);
             assert_eq!(model.members.len(), e.members.len());
             assert_eq!(model.members.get(0).unwrap().value, "0");
         }
@@ -1883,10 +1904,11 @@ mod tests {
             one=1, two=2, three=3
         }
         ";
-        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
-        let mut context = module_context(&test_context);
-        context.debug_print = true;
-        let module = context.parsed_source.module();
+        let mut test_context = parse_from_string("assign-enum.ts", &src);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        global.debug_print = true;
+        let module = parsed_source.module();
         let mut e: Option<&TsEnumDecl> = None;
         for node in module.body.iter() {
             if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
@@ -1897,7 +1919,7 @@ mod tests {
         }
         assert_eq!(e.is_some(), true);
         if let Some(e) = e {
-            let model = ts_enum_to_model_enum(&context, e);
+            let model = ts_enum_to_model_enum(&global, &context, e);
             assert_eq!(model.members.len(), 3);
             assert_eq!(model.members.get(0).unwrap().value, "1");
         }
@@ -1911,8 +1933,8 @@ mod tests {
         }
         ";
         let mut test_context = parse_from_string("nullable-primitives.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let module = parsed_source.module();
         let mut e: Option<&TsEnumDecl> = None;
         for node in module.body.iter() {
             if let ModuleItem::Stmt(Stmt::Decl(Decl::TsEnum(ts_enum))) = node {
@@ -1923,7 +1945,7 @@ mod tests {
         }
         assert_eq!(e.is_some(), true);
         if let Some(e) = e {
-            let model = ts_enum_to_model_enum(&context, e);
+            let model = ts_enum_to_model_enum(&global, &context, e);
             assert_eq!(model.members.len(), 3);
             assert_eq!(model.members.get(0).unwrap().value, "\"one\"");
         }
@@ -1933,12 +1955,11 @@ mod tests {
     fn any_type() {
         let src = "export interface Intf { value: any }";
         let mut test_context = parse_from_string("any-type.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -1953,12 +1974,11 @@ mod tests {
     fn tuple_type() {
         let src = "export interface Intf { value: [string, string] }";
         let mut test_context = parse_from_string("tuple-type.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -1976,12 +1996,11 @@ mod tests {
             export interface A extends B { avalue: string }
         ";
         let mut test_context = parse_from_string("extends-interface.ts", &src);
-        let mut context = module_context(&test_context);
-        let module = context.parsed_source.module();
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 2);
     }
 
@@ -1996,22 +2015,42 @@ mod tests {
         ";
         let mut base_filename = "base-interface.ts";
         let mut base_test_context = parse_from_string(base_filename, &base);
-        let mut base_context = module_context(&base_test_context);
+        let (_, mut base_context, _) = module_context(&base_test_context);
 
         let mut test_context = parse_from_string("extends-interface.ts", &src);
-        test_context
-            .imports
-            .insert(base_filename.into(), base_context.parsed_source.to_owned());
-        let mut context = module_context(&test_context);
+        test_context.add_imports_from(&base_test_context);
 
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 2);
+    }
+
+    #[test]
+    fn extends_imported_interface_which_extends() {
+        let base = "
+            export interface C { cvalue: string; }
+            export interface B extends C { bvalue: string; }
+        ";
+        let src = "
+            import { B } from \"./base-interface.ts\";
+            export interface A extends B { avalue: string; }
+        ";
+        let mut base_filename = "base-interface.ts";
+        let mut base_test_context = parse_from_string(base_filename, &base);
+        let (_, mut base_context, _) = module_context(&base_test_context);
+
+        let mut test_context = parse_from_string("extends-interface.ts", &src);
+        test_context.add_imports_from(&base_test_context);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.var_descriptors.len(), 3);
     }
 
     #[test]
@@ -2025,12 +2064,8 @@ mod tests {
             export type B = Omit<A, \"a\">;
         ";
         let mut test_context = parse_from_string("omit.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        get_mc_intf_export(&mut context, &parsed_source);
     }
 
     #[test]
@@ -2048,12 +2083,8 @@ mod tests {
             }
         ";
         let mut test_context = parse_from_string("omit.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        get_mc_intf_export(&mut context, &parsed_source);
     }
 
     #[test]
@@ -2068,15 +2099,11 @@ mod tests {
             };
         ";
         let mut test_context = parse_from_string("extends-omit.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
 
         assert_eq!(model.var_descriptors.len(), 1);
     }
@@ -2096,15 +2123,11 @@ mod tests {
             }
         ";
         let mut test_context = parse_from_string("extends-omit.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
 
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
@@ -2123,21 +2146,18 @@ mod tests {
         ";
         let mut enum_filename = "enum.ts";
         let mut enum_test_context = parse_from_string(enum_filename, &enum_src);
-        let mut enum_context = module_context(&enum_test_context);
+        let (_, mut enum_context, _) = module_context(&enum_test_context);
 
         let mut test_context = parse_from_string("imports-enum.ts", &src);
         test_context
             .imports
             .insert(enum_filename.into(), enum_context.parsed_source.to_owned());
-        let mut context = module_context(&test_context);
 
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
     }
@@ -2149,15 +2169,11 @@ mod tests {
             export interface A { enum: Enum; }
         ";
         let mut test_context = parse_from_string("imports-enum.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
         assert_eq!(model.enums.get(0).unwrap().have_string_members, false);
@@ -2183,15 +2199,11 @@ mod tests {
             export interface A { enum: Enum; }
         ";
         let mut test_context = parse_from_string("imports-enum.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
         assert_eq!(model.enums.get(0).unwrap().have_string_members, true);
@@ -2215,15 +2227,11 @@ mod tests {
             export interface A { enum: Enum; }
         ";
         let mut test_context = parse_from_string("imports-enum.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
     }
 
     #[test]
@@ -2234,14 +2242,28 @@ mod tests {
             export interface A { enum: Enum; }
         ";
         let mut test_context = parse_from_string("imports-enum.ts", &src);
-        let mut context = module_context(&test_context);
-
-        let module = context.parsed_source.module();
-        extract_import_specifiers(&mut context, module);
-
-        let (intf, export) = get_first_exported_intf(module);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+    }
+
+    #[test]
+    fn no_type_literal_property_type() {
+        let src = "
+            export interface A { value: Array<{a:string}>; }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        assert_panics!(
+            {
+                let (mut global, mut context, parsed_source) = module_context(&test_context);
+                let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+                context.pos.push(export.span);
+                get_intf_model(&mut global, &mut context, &intf, None, None)
+            },
+            includes("Type literals are forbidden: \"{a:string}\"")
+        )
     }
 }
