@@ -33,7 +33,7 @@ func set_null(property_name: String) -> void:
 func is_initialized() -> bool:
     return __initialized";
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ModelImportContext {
     pub name: String,
     pub src: String,
@@ -192,6 +192,8 @@ pub struct ModelVarDescriptor {
     pub optional: bool,
     // Gdscript primitives are non_nullable...
     pub non_nullable: bool,
+    // Imported references required by this var
+    pub imports: Vec<ModelImportContext>,
 }
 
 impl ModelVarDescriptor {
@@ -469,7 +471,10 @@ mod tests {
 
     use crate::model_context::{ModelVarCollection, DEFAULT_INDENT};
 
-    use super::{add_indent, is_builtin, ModelValueCtor, ModelValueForJson, ModelVarDescriptor};
+    use super::{
+        add_indent, is_builtin, ModelImportContext, ModelValueCtor, ModelValueForJson,
+        ModelVarDescriptor,
+    };
 
     const ws: &'static str = DEFAULT_INDENT;
 
@@ -490,6 +495,7 @@ mod tests {
                 collection: None,
                 optional: optional,
                 non_nullable: is_builtin(type_name),
+                imports: Vec::new(),
             }
         }
     }

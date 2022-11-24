@@ -403,7 +403,7 @@ fn convert(
                             intf.id.to_id(),
                             context.get_text(TERM_WIDTH)
                         ));
-                        models.push(get_intf_model(&mut context, &intf, true));
+                        models.push(get_intf_model(&mut context, &intf, None, true));
                         context.stack.pop();
                     }
                     context.pos.pop();
@@ -419,7 +419,7 @@ fn convert(
                         intf.id.to_id(),
                         context.get_text(TERM_WIDTH)
                     ));
-                    models.push(get_intf_model(&mut context, &intf, true));
+                    models.push(get_intf_model(&mut context, &intf, None, true));
                     context.stack.pop();
                 }
                 context.pos.pop();
@@ -488,9 +488,26 @@ fn get_extends_intf_model(
 ) -> ModelContext {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
-        let resolved = if let Some(t) = resolve_imported_specifier_type(context, &id) {
+        let mut resolved = if let Some(t) = resolve_imported_specifier_type(context, &id) {
             t
-        } else if let Some(t) = resolve_local_specifier_type(context, imports, &id) {
+        } else if let Some(t) = resolve_local_specifier_type(context, &id) {
+            t
+        } else if &id.0 == "Omit" {
+            let args = expr
+                .type_args
+                .as_ref()
+                .expect("Expect Omit to have type_args");
+            let arg0 = args.params.get(0).unwrap();
+
+            let mut t = resolve_type(context, arg0);
+            let mut possible_imports: HashMap<String, ModelImportContext> = HashMap::new();
+            t.omit = Some(
+                args.params
+                    .iter()
+                    .skip(1)
+                    .map(|k| resolve_type(context, k))
+                    .collect(),
+            );
             t
         } else {
             if context.debug_print {
@@ -508,6 +525,14 @@ fn get_extends_intf_model(
             &resolved
                 .interface_decl
                 .expect("Interface decl should be here"),
+            resolved.omit.as_mut().and_then(|o| {
+                Some(
+                    o.drain(..)
+                        .map(|t| t.literal)
+                        .flatten()
+                        .collect::<HashSet<_>>(),
+                )
+            }),
             false,
         )
     } else {
@@ -522,6 +547,7 @@ fn get_extends_intf_model(
 fn get_intf_model(
     context: &mut ModuleContext,
     intf: &TsInterfaceDecl,
+    omit: Option<HashSet<String>>,
     top_level: bool,
 ) -> ModelContext {
     let (symbol, _tag) = intf.id.to_id();
@@ -539,13 +565,20 @@ fn get_intf_model(
         .map(|e| get_intf_model_var(context, &mut import_map, e))
         // flatten filters out None!
         .flatten()
+        .filter(|e| {
+            if let Some(o) = &omit {
+                o.contains(&e.src_name)
+            } else {
+                true
+            }
+        })
         .collect::<Vec<_>>();
     let extended_descriptor_iterator = intf
         .extends
         .iter()
         .map(|e| get_extends_intf_model(context, &mut import_map, e).var_descriptors)
         .flatten();
-    let var_descriptors: Vec<_> = extended_descriptor_iterator
+    let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
         .collect();
     let enums: Vec<ModelEnum> = context
@@ -554,6 +587,13 @@ fn get_intf_model(
         .map(|e| ts_enum_to_model_enum(context, e))
         .collect();
     context.enums.clear();
+    for import in var_descriptors
+        .iter_mut()
+        .map(|v| v.imports.drain(..))
+        .flatten()
+    {
+        import_map.insert(import.name.clone(), import);
+    }
     let mut imports: Vec<_> = import_map.into_values().collect();
     imports.sort_by(|a, b| {
         if a.gd_impl == b.gd_impl {
@@ -607,6 +647,8 @@ struct TypeResolution {
     literal: Option<String>,
     gd_impl: bool,
     interface_decl: Option<TsInterfaceDecl>,
+    omit: Option<Vec<TypeResolution>>,
+    imports: Vec<ModelImportContext>,
 }
 
 impl TypeResolution {
@@ -620,6 +662,8 @@ impl TypeResolution {
             literal: None,
             gd_impl: false,
             interface_decl: None,
+            omit: None,
+            imports: Vec::new(),
         }
     }
 
@@ -627,6 +671,31 @@ impl TypeResolution {
         let mut result = TypeResolution::new("");
         result.gd_impl = true;
         result
+    }
+
+    fn add_import(&mut self, context: &ModuleContext) {
+        if let Some(type_name) = &self.ctor_type {
+            if &context.output_type_name != type_name && !is_builtin(type_name) {
+                self.imports.push(ModelImportContext {
+                    name: type_name.clone(),
+                    src: format!("{}.gd", &type_name),
+                    gd_impl: self.gd_impl,
+                })
+            }
+        }
+    }
+
+    fn merge_imports<'a, I>(&mut self, vals: &[TypeResolution]) {
+        for t in vals {
+            let mut clone = t.imports.clone();
+            self.imports.append(&mut clone);
+        }
+    }
+
+    fn take_imports(&mut self, vals: &mut [TypeResolution]) {
+        for t in vals {
+            self.imports.append(&mut t.imports);
+        }
     }
 }
 
@@ -641,22 +710,20 @@ impl From<Ident> for TypeResolution {
             comment: None,
             gd_impl: false,
             interface_decl: None,
+            omit: None,
+            imports: Vec::new(),
         }
     }
 }
 
-fn resolve_type_ref(
-    context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
-    type_ref: &TsTypeRef,
-) -> TypeResolution {
+fn resolve_type_ref(context: &mut ModuleContext, type_ref: &TsTypeRef) -> TypeResolution {
     if let Some(ident) = &type_ref.type_name.as_ident() {
         let id = ident.to_id();
         context.stack.push(format!("resolve_type_ref {:?}", &id));
         let mut resolved_type = if let Some(t) = resolve_imported_specifier_type(context, &id) {
             t
         } else {
-            resolve_local_specifier_type_or_builtin(context, imports, type_ref, &id)
+            resolve_local_specifier_type_or_builtin(context, type_ref, &id)
         };
         // Special case where we want to exclude the contents of this part of the tree
         // for example we encountered a GD_IMPL_DIRECTIVE on an interface union
@@ -666,7 +733,7 @@ fn resolve_type_ref(
                 resolved_type.ctor_type = Some(resolved_type.type_name.clone());
             }
         }
-        add_import(context, imports, &resolved_type);
+        resolved_type.add_import(context);
         context.stack.pop();
         resolved_type
     } else {
@@ -678,11 +745,7 @@ fn resolve_type_ref(
     }
 }
 
-fn resolve_union_type(
-    context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
-    union_type: &TsUnionType,
-) -> TypeResolution {
+fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> TypeResolution {
     if (union_type.types.len() < 2) {
         panic!(
             "At least two types required in a union type\n{}",
@@ -697,8 +760,8 @@ fn resolve_union_type(
         a,
         b
     ));
-    let mut a_type = resolve_type(context, imports, &a);
-    let mut b_type = resolve_type(context, imports, &b);
+    let mut a_type = resolve_type(context, &a);
+    let mut b_type = resolve_type(context, &b);
     let b_is_null = b_type.type_name == "null";
 
     let result = if union_type.types.len() == 2 && b_is_null {
@@ -712,10 +775,10 @@ fn resolve_union_type(
         a_type.comment = Some(format!("{} | null", &a_type.type_name.clone()));
         a_type
     } else {
-        let all_types: Vec<TypeResolution> = union_type
+        let mut all_types: Vec<TypeResolution> = union_type
             .types
             .iter()
-            .map(|t| resolve_type(context, imports, &t))
+            .map(|t| resolve_type(context, &t))
             .collect();
         context.stack.push(format!(
             "union_types: {:?}",
@@ -762,6 +825,7 @@ fn resolve_union_type(
                     .join(" | "),
             );
         }
+        a_type.take_imports(all_types.as_mut_slice());
         context.stack.pop();
         a_type
     };
@@ -770,17 +834,13 @@ fn resolve_union_type(
 }
 
 // type name, ctor, collection, comment
-fn resolve_type(
-    context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
-    ts_type: &TsType,
-) -> TypeResolution {
+fn resolve_type(context: &mut ModuleContext, ts_type: &TsType) -> TypeResolution {
     match (ts_type) {
         TsType::TsTypeRef(type_ref) => {
             context
                 .stack
                 .push(format!("resolve type_ref {:?}", type_ref.type_name));
-            let result = resolve_type_ref(context, imports, &type_ref);
+            let result = resolve_type_ref(context, &type_ref);
             context.stack.pop();
             result
         }
@@ -788,7 +848,7 @@ fn resolve_type(
             context
                 .stack
                 .push(format!("resolve array_type {:?}", array_type));
-            let mut result = resolve_type(context, imports, &array_type.elem_type);
+            let mut result = resolve_type(context, &array_type.elem_type);
             let ctor_type = result.type_name;
             result.type_name = "Array".to_string();
             result.collection = Some(ModelVarCollection {
@@ -830,7 +890,7 @@ fn resolve_type(
                 .push("resolve union_or_intersection_type".into());
             let result = match ui_type {
                 TsUnionOrIntersectionType::TsUnionType(union_type) => {
-                    resolve_union_type(context, imports, union_type)
+                    resolve_union_type(context, union_type)
                 }
                 TsUnionOrIntersectionType::TsIntersectionType(_) => {
                     panic!("Intersection types are not allowed\n{}", context.get_info());
@@ -852,7 +912,7 @@ fn resolve_type(
             let elem_types = tuple_type
                 .elem_types
                 .iter()
-                .map(|t| resolve_type(context, imports, &t.ty))
+                .map(|t| resolve_type(context, &t.ty))
                 .collect::<Vec<_>>();
             let mut result = elem_types.get(0).unwrap().clone();
             if !elem_types.iter().all(|t| t.type_name == result.type_name) {
@@ -963,7 +1023,7 @@ fn get_intf_model_var(
         ));
         context.pos.push(prop_sig.span);
         context.type_directive_consumed = false;
-        let resolved = resolve_type(context, imports, &*type_ann.type_ann);
+        let resolved = resolve_type(context, &*type_ann.type_ann);
         context.pos.pop();
         context.stack.pop();
         if let Some(src_name) = src_name {
@@ -1005,6 +1065,7 @@ fn get_intf_model_var(
                 for_json,
                 collection: resolved.collection,
                 optional: prop_sig.optional,
+                imports: resolved.imports,
             });
         }
     }
@@ -1014,11 +1075,7 @@ fn get_intf_model_var(
     return None;
 }
 
-fn resolve_local_specifier_type(
-    context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
-    id: &Id,
-) -> Option<TypeResolution> {
+fn resolve_local_specifier_type(context: &mut ModuleContext, id: &Id) -> Option<TypeResolution> {
     let mut decl_resolved: Option<TypeResolution> = None;
     context
         .stack
@@ -1030,9 +1087,9 @@ fn resolve_local_specifier_type(
                 ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export)) => {
                     context.pos.push(export.span.to_owned());
                     let decl = &export.decl;
-                    let resolved = resolve_type_decl(context, imports, &decl, &id);
-                    if let Some(r) = resolved {
-                        add_import(context, imports, &r);
+                    let resolved = resolve_type_decl(context, &decl, &id);
+                    if let Some(mut r) = resolved {
+                        r.add_import(context);
                         decl_resolved = Some(r);
                     }
                     context.pos.pop();
@@ -1041,9 +1098,9 @@ fn resolve_local_specifier_type(
                     }
                 }
                 ModuleItem::Stmt(Stmt::Decl(decl)) => {
-                    let resolved = resolve_type_decl(context, imports, &decl, &id);
-                    if let Some(r) = resolved {
-                        add_import(context, imports, &r);
+                    let resolved = resolve_type_decl(context, &decl, &id);
+                    if let Some(mut r) = resolved {
+                        r.add_import(context);
                         decl_resolved = Some(r);
                         break;
                     }
@@ -1061,12 +1118,10 @@ fn resolve_local_specifier_type(
 
 fn resolve_local_specifier_type_or_builtin(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
     type_ref: &TsTypeRef,
     id: &Id,
 ) -> TypeResolution {
-    let mut decl_resolved: Option<TypeResolution> =
-        resolve_local_specifier_type(context, imports, id);
+    let mut decl_resolved: Option<TypeResolution> = resolve_local_specifier_type(context, id);
     // if we were already resolving a type that hasn't been imported
     // or we just can't find the type then maybe it's a TypeScript builtin?
     // TODO: is there a deno_ast helper for these?
@@ -1084,7 +1139,7 @@ fn resolve_local_specifier_type_or_builtin(
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
                 type_ref.type_params.as_ref().and_then(|p| p.params.get(1))
             {
-                Some(resolve_type(context, imports, &prop_type))
+                Some(resolve_type(context, &prop_type))
             } else {
                 None
             };
@@ -1101,7 +1156,7 @@ fn resolve_local_specifier_type_or_builtin(
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
                 type_ref.type_params.as_ref().and_then(|p| p.params.get(0))
             {
-                Some(resolve_type(context, imports, &prop_type))
+                Some(resolve_type(context, &prop_type))
             } else {
                 None
             };
@@ -1162,7 +1217,6 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                 .push(format!("found parsed module {:?}", &relative_filepath));
             let mut import_specifiers: HashMap<Id, PathBuf> = HashMap::new();
             let module = parsed_source.module();
-            let mut imported_imports: HashMap<String, ModelImportContext> = HashMap::new();
             let mut import_context =
                 context.inherit(relative_filepath.as_path(), module_path, parsed_source);
             extract_import_specifiers(&mut import_context, module);
@@ -1183,12 +1237,7 @@ fn resolve_imported_specifier_type(context: &mut ModuleContext, id: &Id) -> Opti
                     dbg_pos(&import_context, "import ExportDecl");
 
                     if !should_skip(&context) {
-                        if let Some(r) = resolve_type_decl(
-                            &mut import_context,
-                            &mut imported_imports,
-                            &export.decl,
-                            &id,
-                        ) {
+                        if let Some(r) = resolve_type_decl(&mut import_context, &export.decl, &id) {
                             result = Some(r);
                         }
                     } else if context.debug_print {
@@ -1244,7 +1293,6 @@ fn extract_import_specifiers(context: &mut ModuleContext, module: &Module) {
 
 fn resolve_type_decl(
     context: &mut ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
     decl: &Decl,
     // if this id is supplied, only match declarations for this id's symbol
     match_id: &Id,
@@ -1259,8 +1307,8 @@ fn resolve_type_decl(
                     "resolve_type_decl:TsTypeAlias {}",
                     alias.id.to_id().0
                 ));
-                let result = resolve_type(context, imports, &alias.type_ann);
-                add_import(context, imports, &result);
+                let mut result = resolve_type(context, &alias.type_ann);
+                result.add_import(context);
                 context.stack.pop();
                 context.pos.pop();
                 Some(result)
@@ -1424,26 +1472,6 @@ fn dbg_pos(context: &ModuleContext, comment: &str) {
     }
 }
 
-fn add_import(
-    context: &ModuleContext,
-    imports: &mut HashMap<String, ModelImportContext>,
-    r: &TypeResolution,
-) {
-    // assume it's an imported type if there's a constructor
-    if let Some(type_name) = &r.ctor_type {
-        if &context.output_type_name != type_name && !is_builtin(type_name) {
-            imports.insert(
-                type_name.to_string(),
-                ModelImportContext {
-                    name: type_name.clone(),
-                    src: format!("{}.gd", &type_name),
-                    gd_impl: r.gd_impl,
-                },
-            );
-        }
-    }
-}
-
 fn detect_indent(template_str: &str, debug_print: bool) -> String {
     let space_str = if let Some(m) = Regex::new("(?m)^[ \t]+").unwrap().find(&template_str) {
         if debug_print {
@@ -1479,8 +1507,11 @@ mod tests {
 
     use deno_ast::{
         parse_module,
-        swc::ast::{
-            Decl, ExportDecl, Module, ModuleDecl, ModuleItem, Stmt, TsEnumDecl, TsInterfaceDecl,
+        swc::{
+            ast::{
+                Decl, ExportDecl, Module, ModuleDecl, ModuleItem, Stmt, TsEnumDecl, TsInterfaceDecl,
+            },
+            common::iter::Iter,
         },
         MediaType, ParseParams, ParsedSource, SourceTextInfo,
     };
@@ -1540,7 +1571,7 @@ mod tests {
         )
     }
 
-    fn get_exported_intf(module: &Module) -> (&Box<TsInterfaceDecl>, &ExportDecl) {
+    fn get_exported_intfs(module: &Module) -> Vec<(&Box<TsInterfaceDecl>, &ExportDecl)> {
         module
             .body
             .iter()
@@ -1560,8 +1591,11 @@ mod tests {
                 }
             })
             .flatten()
-            .next()
-            .unwrap()
+            .collect()
+    }
+
+    fn get_first_exported_intf(module: &Module) -> (&Box<TsInterfaceDecl>, &ExportDecl) {
+        get_exported_intfs(module).into_iter().next().unwrap()
     }
 
     #[test]
@@ -1570,10 +1604,10 @@ mod tests {
         let mut test_context = parse_from_string("iso-date-type.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         let imports: Vec<ModelImportContext> = model
             .imports
             .into_iter()
@@ -1599,10 +1633,10 @@ mod tests {
         let mut test_context = parse_from_string("any-kind.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         let import = model
             .imports
             .iter()
@@ -1622,10 +1656,10 @@ mod tests {
         let mut test_context = parse_from_string("any-kind.ts", ts_intf_union);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
     }
 
     #[test]
@@ -1645,10 +1679,10 @@ mod tests {
         let mut test_context = parse_from_string("nullable-primitives.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -1699,10 +1733,10 @@ mod tests {
         let mut test_context = parse_from_string("nullable-collections.ts", src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -1837,10 +1871,10 @@ mod tests {
         let mut test_context = parse_from_string("any-type.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -1857,10 +1891,10 @@ mod tests {
         let mut test_context = parse_from_string("tuple-type.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -1880,10 +1914,10 @@ mod tests {
         let mut test_context = parse_from_string("extends-interface.ts", &src);
         let mut context = module_context(&test_context);
         let module = context.parsed_source.module();
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.var_descriptors.len(), 2);
         dbg!(model.var_descriptors);
     }
@@ -1910,11 +1944,110 @@ mod tests {
         let module = context.parsed_source.module();
         extract_import_specifiers(&mut context, module);
 
-        let (intf, export) = get_exported_intf(module);
+        let (intf, export) = get_first_exported_intf(module);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut context, &intf, true);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.var_descriptors.len(), 2);
         dbg!(model.var_descriptors);
+    }
+
+    #[test]
+    #[should_panic]
+    fn omit_type() {
+        let src = "
+            interface A {
+                a: true;
+                b: true;
+            }
+            export type B = Omit<A, \"a\">;
+        ";
+        let mut test_context = parse_from_string("omit.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        get_first_exported_intf(module);
+    }
+
+    #[test]
+    #[should_panic]
+    fn omit_property() {
+        let src = "
+            interface A {
+                a: true;
+                // not supported, (what is the gdscript class name?)
+                b: Omit<B, \"c\">
+            }
+            type B = {
+                b: true;
+                c: true
+            }
+        ";
+        let mut test_context = parse_from_string("omit.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        get_first_exported_intf(module);
+    }
+
+    #[test]
+    fn extends_omit() {
+        let src = "
+            interface A {
+                a: true;
+                c: true;
+            }
+            export interface B extends Omit<A, \"a\"> {
+                b: true;
+            };
+        ";
+        let mut test_context = parse_from_string("extends-omit.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+
+        assert_eq!(model.var_descriptors.len(), 1);
+        dbg!(model.var_descriptors);
+    }
+
+    #[test]
+    fn property_extends_omit() {
+        let src = "
+            interface A {
+                a: true;
+                c: true;
+            }
+            interface B extends Omit<A, \"a\"> {
+                b: true;
+            };
+            export interface C {
+                value: B
+            }
+        ";
+        let mut test_context = parse_from_string("extends-omit.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+
+        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
+        assert_eq!(model.imports.len(), 1);
+        assert_eq!(model.imports.get(0).unwrap().name, "B")
     }
 }

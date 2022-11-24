@@ -27,7 +27,7 @@ The example template outputs a gdscript *model* class that extends `Reference` a
 
 * Properties of the incoming interface are mapped to additional *model* class files and imported automatically with `preload`.
 * Optional properties will be skipped (not updated in the model) when they are missing (undefined values in JSON are skipped during stringification)
-* Nullable properties will be assigned to null if the incoming value is null.
+* Nullable properties will be assigned to `null` if the incoming value is null.
 
 ### Class Documentation
 
@@ -77,6 +77,13 @@ Comments can contain directives to help out with conversion
   * This is useful for interface union types that would generate one type or another based on the kind property for example.
   * See [any-kind.ts](./test-fixtures/any-kind.ts) for an example.
   * The default template will import these types from the parent directory ("../")
+
+## Supported TypeScript Builtin and Utility Types
+
+* `Omit<T, k...>`: Keys specified by k... will be omitted.
+* `Date`: Must supply an `Iso8601Date` class to handle the ISO8601 timestamp string from the json value.
+* `Array<T>`: Treated the same as `T[]`
+* `Record<K, T>`: Treated as a Dictionary of `<string, T>`
 
 ## Templates
 
@@ -230,7 +237,7 @@ func is_initialized() -> bool:
 
 * Generic type parameters aren't supported well. We'd have to get into extensible sub-classes to model them properly. Use `@typescript-to-gdscript-gd-impl` to opt out here...
 * TypeScript Enums with assignment expressions don't work (yet)
-* Any Date typed values will require implementation of an Iso8601Date class which is not provided.
+* Any Date typed values will require implementation of an `Iso8601Date` class which is not provided.
 * Validation is extremely limited
     * The values of literal types or literal type unions have comments but are not enforced.
 
