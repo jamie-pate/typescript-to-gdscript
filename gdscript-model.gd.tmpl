@@ -8,12 +8,17 @@ extends Reference
 {{ for import in imports }}
 const {import.name} = preload("{{ if import.gd_impl }}.{{ endif }}./{import.src}"){{ if @last }}
 {{ endif }}{{ endfor -}}
-{{ for enum in enums }}
+{{ for enum in enums }}{{ if enum.have_string_members }}
+const {enum.name} = \{
+	{{ for m in enum.members }}{m.name} = {m.value}{{ if not @last }},
+	{{ endif }}{{endfor}}
+}
+{{ else }}
 enum {enum.name} \{
 	{{ for m in enum.members }}{m.name} = {m.value}{{ if not @last }},
 	{{ endif }}{{ endfor }}
-}{{ if @last }}
-{{ endif }}{{ endfor }}
+}
+{{endif}}{{ endfor }}
 {state_vars}
 
 {{ for var_decl in var_descriptors -}}

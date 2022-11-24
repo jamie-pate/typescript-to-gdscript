@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use deno_ast::swc::ast::TsEnumDecl;
 use indoc::formatdoc;
 use serde::Serialize;
 
@@ -157,15 +158,16 @@ pub struct ModelValueForJson {
     pub suffix: Option<(String, String)>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ModelEnumMember {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ModelEnum {
     pub name: String,
+    pub have_string_members: bool,
     pub members: Vec<ModelEnumMember>,
 }
 
@@ -194,6 +196,8 @@ pub struct ModelVarDescriptor {
     pub non_nullable: bool,
     // Imported references required by this var
     pub imports: Vec<ModelImportContext>,
+    // Enums for this property
+    pub enums: Vec<ModelEnum>,
 }
 
 impl ModelVarDescriptor {
@@ -496,6 +500,7 @@ mod tests {
                 optional: optional,
                 non_nullable: is_builtin(type_name),
                 imports: Vec::new(),
+                enums: Vec::new(),
             }
         }
     }

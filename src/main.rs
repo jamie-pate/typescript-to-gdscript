@@ -234,7 +234,6 @@ struct ModuleContext<'a> {
     pos: Vec<Span>,
     resolving_local: HashSet<Id>,
     stack: Vec<String>,
-    enums: Vec<TsEnumDecl>,
     debug_print: bool,
     indent: String,
     relative_filepath: &'a Path,
@@ -284,7 +283,6 @@ impl<'a> ModuleContext<'a> {
             } else {
                 Vec::new()
             },
-            enums: Vec::new(),
             output_type_name: "".into(),
             type_directive_consumed: false,
             pos: Vec::new(),
@@ -445,39 +443,80 @@ fn convert(
 
 fn ts_enum_to_model_enum(context: &ModuleContext, ts_enum: &TsEnumDecl) -> ModelEnum {
     let id = ts_enum.id.to_id();
+    let member_types = ts_enum
+        .members
+        .iter()
+        .map(|m| {
+            if let Some(init_expr) = m.init.as_ref() {
+                if let Expr::Lit(lit_expr) = init_expr.as_ref() {
+                    (Some(resolve_lit_type(context, &lit_to_ts_lit(lit_expr))), m)
+                } else {
+                    panic!(
+                        "Unsupported enum type not supported {:?} {:?}\n{}",
+                        id,
+                        init_expr,
+                        context.get_info()
+                    );
+                }
+            } else {
+                (None, m)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut type_set: Vec<_> = member_types
+        .iter()
+        .map(|(t, _)| if let Some(t) = t { &t.type_name } else { "" })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let invalid_types: Vec<&str> = type_set
+        .iter()
+        // TODO: better way to deref_iter
+        .map(|s| *s)
+        .filter(|s| !["int", "String", ""].contains(s))
+        .collect();
+    if invalid_types.len() > 0 {
+        panic!(
+            "Forbidden enum member types detected: {}\n{}",
+            invalid_types.join(", "),
+            context.get_info()
+        );
+    }
+    if type_set.len() > 1 {
+        panic!(
+            "Mixed enum member types are not allowed: {}\n{}",
+            type_set.into_iter().collect::<Vec<_>>().join(", "),
+            context.get_info()
+        );
+    }
     ModelEnum {
         name: (&*id.0).to_string(),
-        members: ts_enum
-            .members
+        have_string_members: member_types.iter().any(|(t, _)| {
+            if let Some(t) = t {
+                t.type_name == "String"
+            } else {
+                false
+            }
+        }),
+        members: member_types
             .iter()
             .enumerate()
-            .map(|(i, m)| ModelEnumMember {
+            .map(|(i, (t, m))| ModelEnumMember {
                 name: match &m.id {
                     TsEnumMemberId::Ident(ident) => (&*ident.to_id().0).to_string(),
                     TsEnumMemberId::Str(str) => (&*str.value).to_string(),
                 },
-                value: if let Some(init_expr) = m.init.as_ref() {
-                    if let Expr::Lit(lit_expr) = init_expr.as_ref() {
-                        resolve_lit_type(context, &lit_to_ts_lit(lit_expr))
-                            .literal
-                            .expect(&format!(
-                                "Expected a literal value for {:?}\n{}",
-                                lit_expr,
-                                context.get_info()
-                            ))
-                    } else {
-                        panic!(
-                            "Unsupported enum type not supported {:?} {:?}\n{}",
-                            id,
-                            init_expr,
-                            context.get_info()
-                        );
-                    }
+                value: if let Some(t) = t {
+                    t.literal.clone().expect(&format!(
+                        "Expected a literal value for {:?}\n{}",
+                        m.init,
+                        context.get_info()
+                    ))
                 } else {
                     i.to_string()
                 },
             })
-            .collect(),
+            .collect::<Vec<_>>(),
     }
 }
 
@@ -584,12 +623,11 @@ fn get_intf_model(
     let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
         .collect();
-    let enums: Vec<ModelEnum> = context
-        .enums
-        .iter()
-        .map(|e| ts_enum_to_model_enum(context, e))
+    let enums: Vec<_> = var_descriptors
+        .iter_mut()
+        .map(|v| v.enums.drain(..))
+        .flatten()
         .collect();
-    context.enums.clear();
     for import in var_descriptors
         .iter_mut()
         .map(|v| v.imports.drain(..))
@@ -651,6 +689,7 @@ struct TypeResolution {
     literal: Option<String>,
     gd_impl: bool,
     interface_decl: Option<TsInterfaceDecl>,
+    enums: Vec<ModelEnum>,
     omit: Option<Vec<TypeResolution>>,
     imports: Vec<ModelImportContext>,
 }
@@ -667,6 +706,7 @@ impl TypeResolution {
             gd_impl: false,
             interface_decl: None,
             omit: None,
+            enums: Vec::new(),
             imports: Vec::new(),
         }
     }
@@ -715,6 +755,7 @@ impl From<Ident> for TypeResolution {
             gd_impl: false,
             interface_decl: None,
             omit: None,
+            enums: Vec::new(),
             imports: Vec::new(),
         }
     }
@@ -1090,6 +1131,7 @@ fn get_intf_model_var(
                 for_json,
                 collection: resolved.collection,
                 optional: prop_sig.optional,
+                enums: resolved.enums,
                 imports: resolved.imports,
             });
         }
@@ -1315,7 +1357,6 @@ fn resolve_type_decl(
     match_id: &Id,
 ) -> Option<TypeResolution> {
     let mut result: Option<TypeResolution> = None;
-    let mut ts_enum_to_push: Option<&TsEnumDecl> = None;
     match decl {
         Decl::TsTypeAlias(alias) => {
             result = if match_id.0 == alias.id.to_id().0 {
@@ -1389,8 +1430,14 @@ fn resolve_type_decl(
         }
         Decl::TsEnum(ts_enum) => {
             if match_id.0 == ts_enum.id.to_id().0 {
-                context.enums.push(ts_enum.as_ref().clone());
-                result = Some(ts_enum.id.clone().into())
+                let enum_model = ts_enum_to_model_enum(context, ts_enum);
+                let mut resolved = TypeResolution::new(if enum_model.have_string_members {
+                    "String"
+                } else {
+                    "int"
+                });
+                resolved.enums.push(enum_model);
+                result = Some(resolved);
             }
         }
         _ => {
@@ -1936,7 +1983,6 @@ mod tests {
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.var_descriptors.len(), 2);
-        dbg!(model.var_descriptors);
     }
 
     #[test]
@@ -1966,7 +2012,6 @@ mod tests {
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
         assert_eq!(model.var_descriptors.len(), 2);
-        dbg!(model.var_descriptors);
     }
 
     #[test]
@@ -2034,7 +2079,6 @@ mod tests {
         let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
 
         assert_eq!(model.var_descriptors.len(), 1);
-        dbg!(model.var_descriptors);
     }
 
     #[test]
@@ -2066,5 +2110,138 @@ mod tests {
         assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
         assert_eq!(model.imports.len(), 1);
         assert_eq!(model.imports.get(0).unwrap().name, "B")
+    }
+
+    #[test]
+    fn imported_enum_property() {
+        let enum_src = "
+            export enum Enum {One=1,Two=2}
+        ";
+        let src = "
+            import { Enum } from \"enum.ts\";
+            export interface A { enum: Enum; }
+        ";
+        let mut enum_filename = "enum.ts";
+        let mut enum_test_context = parse_from_string(enum_filename, &enum_src);
+        let mut enum_context = module_context(&enum_test_context);
+
+        let mut test_context = parse_from_string("imports-enum.ts", &src);
+        test_context
+            .imports
+            .insert(enum_filename.into(), enum_context.parsed_source.to_owned());
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.enums.len(), 1);
+    }
+
+    #[test]
+    fn enum_property() {
+        let src = "
+            export enum Enum {One=1,Two=2}
+            export interface A { enum: Enum; }
+        ";
+        let mut test_context = parse_from_string("imports-enum.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.enums.len(), 1);
+        assert_eq!(model.enums.get(0).unwrap().have_string_members, false);
+        assert_eq!(
+            model
+                .var_descriptors
+                .get(0)
+                .unwrap()
+                .decl_type
+                .as_ref()
+                .unwrap(),
+            "int"
+        )
+    }
+
+    #[test]
+    fn string_enum_member_expressions() {
+        // there is no such thing as a string enum in gdscript,
+        // All enums are just named int values.
+        // The template should use a dictionary to emulate this behavior
+        let src = "
+            export enum Enum {One=\"one\",Two=\"two\"}
+            export interface A { enum: Enum; }
+        ";
+        let mut test_context = parse_from_string("imports-enum.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.enums.len(), 1);
+        assert_eq!(model.enums.get(0).unwrap().have_string_members, true);
+        assert_eq!(
+            model
+                .var_descriptors
+                .get(0)
+                .unwrap()
+                .decl_type
+                .as_ref()
+                .unwrap(),
+            "String"
+        )
+    }
+
+    #[test]
+    #[should_panic]
+    fn mixed_enum_member_expressions() {
+        let src = "
+            export enum Enum {One=1,Two=\"two\"}
+            export interface A { enum: Enum; }
+        ";
+        let mut test_context = parse_from_string("imports-enum.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
+    }
+
+    #[test]
+    #[should_panic]
+    fn float_enum_member_expressions() {
+        let src = "
+            export enum Enum {One=1.5,Two=2.5}
+            export interface A { enum: Enum; }
+        ";
+        let mut test_context = parse_from_string("imports-enum.ts", &src);
+        let mut context = module_context(&test_context);
+
+        let module = context.parsed_source.module();
+        extract_import_specifiers(&mut context, module);
+
+        let (intf, export) = get_first_exported_intf(module);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut context, &intf, None, true);
     }
 }
