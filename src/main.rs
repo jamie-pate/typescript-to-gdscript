@@ -557,7 +557,9 @@ fn get_intf_model(
         }
         context.output_type_name = String::from(&*symbol);
     }
-    context.stack.push(format!("get_intf_model {}", context.output_type_name));
+    context
+        .stack
+        .push(format!("get_intf_model {}", context.output_type_name));
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
         .body
@@ -789,36 +791,57 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
                 .map(|tr| &tr.type_name)
                 .collect::<Vec<&String>>()
         ));
-        if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
+        let mut result = if !all_types.iter().all(|rt| rt.type_name == a_type.type_name) {
             if have_directive(context, GD_IMPL_DIRECTIVE) {
-                a_type = TypeResolution::gd_impl();
+                TypeResolution::gd_impl()
             } else {
-                let all_types = all_types
-                    .into_iter()
-                    .map(|tr| tr.type_name)
-                    .collect::<Vec<String>>();
-                let pos = context.pos.last().unwrap();
-                if context.debug_print {
-                    dbg_pos(context, "Union");
+                if all_types.iter().all(|t| is_builtin(&t.type_name)) {
+                    let mut result = TypeResolution::new("any");
+                    result.comment = Some(
+                        all_types
+                            .iter()
+                            .map(|tr| tr.type_name.clone())
+                            .collect::<Vec<_>>()
+                            .join(" | "),
+                    );
+                    result.nullable = all_types.iter().any(|tr| {
+                        if let Some(l) = tr.literal.as_ref() {
+                            l == "null"
+                        } else {
+                            false
+                        }
+                    });
+                    result
+                } else {
+                    let all_types = all_types
+                        .iter()
+                        .map(|tr| tr.type_name.clone())
+                        .collect::<Vec<String>>();
+                    let pos = context.pos.last().unwrap();
+                    if context.debug_print {
+                        dbg_pos(context, "Union");
+                    }
+                    panic!(
+                        "Unsupported type, union types must all have the same godot type unless \
+                        you supply {} directive or they must all be builtin types. {:?}\n{:#?}",
+                        GD_IMPL_DIRECTIVE,
+                        all_types,
+                        context.get_info()
+                    );
                 }
-                panic!(
-                    "Unsupported type, union types must all have the same godot type unless \
-                    you supply {} directive. {:?}\n{:#?}",
-                    GD_IMPL_DIRECTIVE,
-                    all_types,
-                    context.get_info()
-                );
             }
-        }
+        } else {
+            a_type.clone()
+        };
         let literal_comments = all_types
             .iter()
             .map(|rt| rt.literal.as_deref())
             .flatten()
             .collect::<Vec<&str>>();
         if literal_comments.len() == all_types.len() {
-            a_type.comment = Some(format!("Literally {}", literal_comments.join(" | ")));
+            result.comment = Some(format!("Literally {}", literal_comments.join(" | ")));
         } else if all_types.len() > 0 {
-            a_type.comment = Some(
+            result.comment = Some(
                 all_types
                     .iter()
                     .map(|rt| rt.comment.to_owned())
@@ -827,9 +850,9 @@ fn resolve_union_type(context: &mut ModuleContext, union_type: &TsUnionType) -> 
                     .join(" | "),
             );
         }
-        a_type.take_imports(all_types.as_mut_slice());
+        result.take_imports(all_types.as_mut_slice());
         context.stack.pop();
-        a_type
+        result
     };
     context.stack.pop();
     result
