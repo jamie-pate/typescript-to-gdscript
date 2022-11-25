@@ -57,18 +57,17 @@ const GD_IMPL_DIRECTIVE: &str = "@typescript-to-gdscript-gd-impl";
 pub mod model_context;
 
 fn main() {
-    let mut debug_print: bool = false;
     let mut output_dir: Option<PathBuf> = None;
     let mut template_filename: Option<PathBuf> = None;
     let mut template_str: Option<String> = None;
     let mut src_files: Vec<PathBuf> = Vec::new();
 
-    let mut context = Context::new(debug_print, &DEFAULT_INDENT);
+    let mut context = Context::new();
 
     for arg in args().skip(1) {
         // TODO: in parallel!
         if arg == "--debug-print" {
-            debug_print = true;
+            context.debug_print = true;
         } else if arg.starts_with("--") {
             eprintln!("Unexpected flag {}", arg);
             usage();
@@ -85,7 +84,7 @@ fn main() {
             "Failed to load template file {:?}",
             &template_filename
         ));
-        context.indent = detect_indent(&template_str, debug_print);
+        context.indent = detect_indent(&template_str, context.debug_print);
         let mut template = TinyTemplate::new();
         template
             .add_template(TEMPLATE_NAME, &template_str)
@@ -109,10 +108,10 @@ fn main() {
                 &mut import_stack,
                 &mut context.imported_modules,
                 &canonical_filepath,
-                debug_print,
+                context.debug_print,
             );
         }
-        if debug_print {
+        if context.debug_print {
             eprintln!("{} files parsed", context.imported_modules.len());
         }
         for filename in src_files.iter() {
@@ -245,10 +244,10 @@ struct Context {
 }
 
 impl Context {
-    fn new(debug_print: bool, indent: &str) -> Self {
+    fn new() -> Self {
         Context {
-            debug_print,
-            indent: indent.to_string(),
+            debug_print: false,
+            indent: DEFAULT_INDENT.to_string(),
             imported_modules: HashMap::new(),
             stack: Vec::new(),
         }
@@ -1420,7 +1419,7 @@ fn resolve_type_decl(
             if match_id.0 == id.0 {
                 panic!(
                     "\
-                    Conversion of class declarations {:?} is unsupported.\n\
+                    Conversion of class types such as {} is forbidden.\n\
                     Create an interface and have the class implement that interface instead\n\
                     {}",
                     id.0,
@@ -1636,7 +1635,7 @@ mod tests {
     }
 
     fn module_context(test_context: &TestContext) -> (Context, ModuleContext, Rc<ParsedSource>) {
-        let mut global = Context::new(false, &DEFAULT_INDENT);
+        let mut global = Context::new();
         global.imported_modules.extend(
             test_context
                 .imports
@@ -2264,6 +2263,24 @@ mod tests {
                 get_intf_model(&mut global, &mut context, &intf, None, None)
             },
             includes("Type literals are forbidden: \"{a:string}\"")
+        )
+    }
+    #[test]
+    fn no_class_property_type() {
+        let src = "
+            class Cls {}
+            export interface A { value: Cls; }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        assert_panics!(
+            {
+                let (mut global, mut context, parsed_source) = module_context(&test_context);
+                let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+                context.pos.push(export.span);
+                get_intf_model(&mut global, &mut context, &intf, None, None)
+            },
+            includes("Conversion of class types such as Cls is forbidden"),
         )
     }
 }
