@@ -80,7 +80,8 @@ Comments can contain directives to help out with conversion
 
 ## Supported TypeScript Builtin and Utility Types
 
-* `Omit<T, k...>`: Keys specified by k... will be omitted.
+* `Omit<T, k...>`: Keys specified by k... will be omitted. (This only works with the extends keyword)
+* `Readonly<T>`: Readonly is discarded and T is used. (This only works with the extends keyword)
 * `Date`: Must supply an `Iso8601Date` class to handle the ISO8601 timestamp string from the json value.
 * `Array<T>`: Treated the same as `T[]`
 * `Record<K, T>`: Treated as a Dictionary of `<string, T>`

@@ -513,6 +513,13 @@ fn get_extends_intf_model(
                     .collect(),
             );
             (t, None)
+        } else if &id.0 == "Readonly" {
+            let args = expr
+                .type_args
+                .as_ref()
+                .expect("Expect Omit to have type_args");
+            let arg0 = args.params.get(0).unwrap();
+            (resolve_type(global, context, arg0), None)
         } else {
             if global.debug_print {
                 dbg!(expr);
@@ -543,7 +550,9 @@ fn get_extends_intf_model(
             resolved.omit.as_mut().and_then(|o| {
                 Some(
                     o.drain(..)
-                        .map(|t| t.literal)
+                        // TODO: this may be fragile? it counts on other places using
+                        // the "" to quote string literals
+                        .map(|t| t.literal.and_then(|s| Some(s.replace("\"", ""))))
                         .flatten()
                         .collect::<HashSet<_>>(),
                 )
@@ -595,7 +604,7 @@ fn get_intf_model(
         .flatten()
         .filter(|e| {
             if let Some(o) = &omit {
-                o.contains(&e.src_name)
+                !o.contains(&e.src_name)
             } else {
                 true
             }
@@ -1255,7 +1264,9 @@ fn resolve_local_specifier_type_or_builtin(
                 nullable: false,
             });
             result
-        }
+        },
+        "Omit" => panic!("Omit<T, ...> is forbidden in this position. What is the exported type name?\n{}", global.get_info(context)),
+        "Readonly" => panic!("Readonly<T> is forbidden in this position. What is the exported type name?\n{}", global.get_info(context)),
         _ => {
             if global.debug_print {
                 dbg!(type_ref);
@@ -2076,7 +2087,7 @@ mod tests {
                 // not supported, (what is the gdscript class name?)
                 b: Omit<B, \"c\">
             }
-            type B = {
+            interface B {
                 b: true;
                 c: true
             }
@@ -2104,7 +2115,7 @@ mod tests {
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
 
-        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.var_descriptors.len(), 2);
     }
 
     #[test]
@@ -2122,6 +2133,73 @@ mod tests {
             }
         ";
         let mut test_context = parse_from_string("extends-omit.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+
+        assert_eq!(model.var_descriptors.len(), 1);
+        assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
+        assert_eq!(model.imports.len(), 1);
+        assert_eq!(model.imports.get(0).unwrap().name, "B")
+    }
+
+    #[test]
+    #[should_panic]
+    fn readonly_property() {
+        let src = "
+            interface A {
+                a: true;
+                // not supported, (what is the gdscript class name?)
+                b: Readonly<B>
+            }
+            interface B {
+                b: true;
+                c: true
+            }
+        ";
+        let mut test_context = parse_from_string("readonly-property.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        get_mc_intf_export(&mut context, &parsed_source);
+    }
+
+    #[test]
+    fn extends_readonly() {
+        let src = "
+            interface A {
+                a: true;
+                c: true;
+            }
+            export interface B extends Readonly<A> {
+                b: true;
+            };
+        ";
+        let mut test_context = parse_from_string("extends-readonly.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+
+        assert_eq!(model.var_descriptors.len(), 3);
+    }
+
+    #[test]
+    fn property_extends_readonly() {
+        let src = "
+            interface A {
+                a: true;
+                c: true;
+            }
+            interface B extends Readonly<A> {
+                b: true;
+            };
+            export interface C {
+                value: B
+            }
+        ";
+        let mut test_context = parse_from_string("property-extends-readonly.ts", &src);
         let (mut global, mut context, parsed_source) = module_context(&test_context);
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
