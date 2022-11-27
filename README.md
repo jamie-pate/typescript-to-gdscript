@@ -13,13 +13,14 @@ This enables strongly typed communication between TypeScript and the Godot game 
 Usage:
 
 ```
-typescript-to-gdscript [--debug-print] templatefile.gd.tmpl outputdir input1.ts [input2.ts...]
+typescript-to-gdscript [--debug-print] [--debug-trace] templatefile.gd.tmpl outputdir input1.ts [input2.ts...]
 ```
 
 Reads all interfaces from input.ts files exports them to `outputdir/[InterfaceName].gd` files.
 
 * Uses templatefile.gd.tmpl as the template.
 * When `--debug-print` is provided the program will emit extra debug information on stderr.
+* When `--debug-trace` is provided the program will emit even more debug information (including previous stack trace branches )
 
 ## Output
 

@@ -10,7 +10,7 @@ use deno_ast::{
             BindingIdent, Decl, Expr, Id, Ident, Import, ImportDecl, ImportNamedSpecifier,
             ImportSpecifier, Lit, Module, ModuleDecl, ModuleItem, Pat, Stmt, TsEnumDecl,
             TsEnumMemberId, TsExprWithTypeArgs, TsInterfaceDecl, TsKeywordType, TsKeywordTypeKind,
-            TsLit, TsPropertySignature, TsType, TsTypeElement, TsTypeRef,
+            TsLit, TsPropertySignature, TsType, TsTypeElement, TsTypeParamInstantiation, TsTypeRef,
             TsUnionOrIntersectionType, TsUnionType,
         },
         atoms::Atom,
@@ -38,11 +38,14 @@ use std::{
     collections::{HashMap, HashSet},
     env::{args, current_dir, current_exe},
     ffi::OsStr,
+    fmt::Display,
     fs::{create_dir_all, read_to_string, write},
     path::{self, Path, PathBuf},
     process::exit,
     rc::Rc,
 };
+
+use indoc::indoc;
 
 use crate::model_context::ModelEnumMember;
 
@@ -67,6 +70,9 @@ fn main() {
     for arg in args().skip(1) {
         // TODO: in parallel!
         if arg == "--debug-print" {
+            context.debug_print = true;
+        } else if arg == "--debug-trace" {
+            context.stack.show_trace = true;
             context.debug_print = true;
         } else if arg.starts_with("--") {
             eprintln!("Unexpected flag {}", arg);
@@ -133,11 +139,16 @@ fn main() {
 
 fn usage() {
     eprintln!(
-        "Usage: {} [--debug-print] templatefile.gd.tmpl outputdir input1.ts [input2.ts...]",
+        "Usage: {} [--debug-print] [--debug-trace] templatefile.gd.tmpl outputdir input1.ts [input2.ts...]",
         exe_name().expect("weird, exe name could not be retrieved")
     );
-    eprintln!("Reads all interfaces from input.ts files exports them to outputdir/<InterfaceName>.gd files.");
-    eprintln!("Uses templatefile.gd.tmpl as the template.");
+    eprintln!(indoc! {"
+        Reads all interfaces from input.ts files exports them to outputdir/<InterfaceName>.gd files
+        using the templatefile.gd.tmpl template to generate the classes.
+
+        --debug-print: Print extra debug output
+        --debug-trace: Print even more debug output (adds a trace of previous debug stack entries)
+    "});
 }
 
 fn exe_name() -> Option<String> {
@@ -236,11 +247,52 @@ lazy_static! {
     };
 }
 
+struct TraceStack {
+    stack: Vec<String>,
+    trace: Vec<String>,
+    show_trace: bool,
+}
+
+impl TraceStack {
+    fn new() -> Self {
+        TraceStack {
+            stack: Vec::new(),
+            trace: Vec::new(),
+            show_trace: false,
+        }
+    }
+
+    fn push(&mut self, str: String) {
+        self.trace
+            .push(format!("{}{}", ".".repeat(self.stack.len() + 1), &str));
+        self.stack.push(str);
+    }
+
+    fn pop(&mut self) -> Option<String> {
+        let result = self.stack.pop();
+        if self.stack.is_empty() {
+            self.trace.clear();
+        }
+        result
+    }
+}
+
+impl Display for TraceStack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let trace = if self.show_trace {
+            format!("\ntrace:\n\t{}", self.trace.join("\t\n"))
+        } else {
+            "".to_string()
+        };
+        write!(f, "stack:\n\t{}{}", self.stack.join("\t\n"), trace)
+    }
+}
+
 struct Context {
     debug_print: bool,
     indent: String,
     imported_modules: HashMap<PathBuf, Rc<ParsedSource>>,
-    stack: Vec<String>,
+    stack: TraceStack,
 }
 
 impl Context {
@@ -249,13 +301,13 @@ impl Context {
             debug_print: false,
             indent: DEFAULT_INDENT.to_string(),
             imported_modules: HashMap::new(),
-            stack: Vec::new(),
+            stack: TraceStack::new(),
         }
     }
 
     fn get_info(&self, mc: &ModuleContext) -> String {
         if self.debug_print {
-            format!("{}\nstack:\n\t{}", mc.get_info_(), self.stack.join("\n\t"))
+            format!("{}\nstack:\n\t{}", mc.get_info_(), self.stack)
         } else {
             mc.get_info_()
         }
@@ -482,29 +534,69 @@ fn ts_enum_to_model_enum(
     }
 }
 
+fn resolve_interface_specifier_type(
+    global: &mut Context,
+    context: &mut ModuleContext,
+    id: &Id,
+) -> Option<(TypeResolution, Option<ModuleContext>)> {
+    if let Some((t, import_context)) = resolve_imported_specifier_type(global, context, &id) {
+        Some((t, Some(import_context)))
+    } else if let Some(t) = resolve_local_specifier_type(global, context, &id) {
+        Some((t, None))
+    } else {
+        None
+    }
+}
+
+fn generic_type_arg0_ident<'a>(
+    global: &Context,
+    context: &ModuleContext,
+    id: &Id,
+    expr: &'a TsExprWithTypeArgs,
+) -> (&'a TsTypeParamInstantiation, Id) {
+    let args = expr.type_args.as_ref().expect(&format!(
+        "Expect {} to have type_args\n{}",
+        id.0,
+        global.get_info(context)
+    ));
+    let arg0Id = args
+        .params
+        .get(0)
+        .and_then(|p| p.as_ts_type_ref())
+        .and_then(|t| t.type_name.as_ident())
+        .expect(&format!(
+            "Expected {}<T{}>'s T to be a type ref\n{}",
+            id.0,
+            if args.params.len() > 1 { ",..." } else { "" },
+            global.get_info(context)
+        ))
+        .to_id()
+        .to_owned();
+    (args, arg0Id)
+}
+
 fn get_extends_intf_model(
     global: &mut Context,
     context: &mut ModuleContext,
     expr: &TsExprWithTypeArgs,
     extending: &Ident,
-) -> ModelContext {
+) -> Vec<ModelVarDescriptor> {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
         global.stack.push(format!("Searching for {}", id.0));
         let (mut resolved, mut import_context) = if let Some((t, import_context)) =
-            resolve_imported_specifier_type(global, context, &id)
+            resolve_interface_specifier_type(global, context, &id)
         {
-            (t, Some(import_context))
-        } else if let Some(t) = resolve_local_specifier_type(global, context, &id) {
-            (t, None)
+            (t, import_context)
         } else if &id.0 == "Omit" {
-            let args = expr
-                .type_args
-                .as_ref()
-                .expect("Expect Omit to have type_args");
-            let arg0 = args.params.get(0).unwrap();
+            let (args, arg0Id) = generic_type_arg0_ident(global, context, &id, expr);
 
-            let mut t = resolve_type(global, context, arg0);
+            let (mut t, mut import_context) =
+                resolve_interface_specifier_type(global, context, &arg0Id).expect(&format!(
+                    "Expect Omit<T,...>'s T to resolve to an Interface\n{}",
+                    global.get_info(context)
+                ));
+            let intf_context = import_context.as_mut().unwrap_or(context);
             t.omit = Some(
                 args.params
                     .iter()
@@ -514,12 +606,10 @@ fn get_extends_intf_model(
             );
             (t, None)
         } else if &id.0 == "Readonly" {
-            let args = expr
-                .type_args
-                .as_ref()
-                .expect("Expect Omit to have type_args");
-            let arg0 = args.params.get(0).unwrap();
-            (resolve_type(global, context, arg0), None)
+            let (_, arg0Id) = generic_type_arg0_ident(global, context, &id, expr);
+
+            resolve_interface_specifier_type(global, context, &arg0Id)
+                .expect("Expect Readonly<T>'s T to resolve to an Interface")
         } else {
             if global.debug_print {
                 dbg!(expr);
@@ -561,7 +651,7 @@ fn get_extends_intf_model(
         );
         intf_context.pos.pop();
         global.stack.pop();
-        r
+        r.var_descriptors
     } else {
         panic!(
             "IDK what to do with this extends expression:{:#?}\n{}",
@@ -587,12 +677,13 @@ fn get_intf_model(
         context.output_type_name = sstr.clone();
     }
     global.stack.push(format!(
-        "get_intf_model {}",
+        "get_intf_model {} in {:?}",
         if let Some(extending) = extending {
             format!("{} extending {}", sstr, extending)
         } else {
             sstr
-        }
+        },
+        context.relative_filepath
     ));
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
@@ -613,7 +704,7 @@ fn get_intf_model(
     let extended_descriptor_iterator = intf
         .extends
         .iter()
-        .map(|e| get_extends_intf_model(global, context, e, &intf.id).var_descriptors)
+        .map(|e| get_extends_intf_model(global, context, e, &intf.id))
         .flatten();
     let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
@@ -1103,7 +1194,7 @@ fn get_intf_model_var(
         ));
         let empty = String::from("");
         global.stack.push(format!(
-            "get_intf_model_var {:?} {:?}",
+            "get_intf_model_var {} {:?}",
             &src_name.as_ref().unwrap_or(&empty),
             context.get_text(TERM_WIDTH)
         ));
@@ -1264,9 +1355,15 @@ fn resolve_local_specifier_type_or_builtin(
                 nullable: false,
             });
             result
-        },
-        "Omit" => panic!("Omit<T, ...> is forbidden in this position. What is the exported type name?\n{}", global.get_info(context)),
-        "Readonly" => panic!("Readonly<T> is forbidden in this position. What is the exported type name?\n{}", global.get_info(context)),
+        }
+        "Omit" => panic!(
+            "Omit<T, ...> is forbidden in this position. What is the exported type name?\n{}",
+            global.get_info(context)
+        ),
+        "Readonly" => panic!(
+            "Readonly<T> is forbidden in this position. What is the exported type name?\n{}",
+            global.get_info(context)
+        ),
         _ => {
             if global.debug_print {
                 dbg!(type_ref);
@@ -1409,6 +1506,9 @@ fn resolve_type_decl(
                 context.pos.pop();
                 Some(result)
             } else {
+                if global.debug_print {
+                    eprintln!("type alias {} != {}", alias.id.to_id().0, match_id.0);
+                }
                 None
             }
         }
@@ -1621,9 +1721,14 @@ mod tests {
     }
 
     impl TestContext {
-        fn add_imports_from(&mut self, other: &TestContext) {
-            self.imports
-                .extend(other.imports.iter().map(|(k, v)| (k.clone(), Rc::clone(v))));
+        fn add_imports_from(&mut self, other: &[&TestContext]) {
+            self.imports.extend(
+                other
+                    .iter()
+                    .map(|o| &o.imports)
+                    .flatten()
+                    .map(|(k, v)| (k.clone(), Rc::clone(&v))),
+            );
         }
     }
 
@@ -2028,7 +2133,7 @@ mod tests {
         let (_, mut base_context, _) = module_context(&base_test_context);
 
         let mut test_context = parse_from_string("extends-interface.ts", &src);
-        test_context.add_imports_from(&base_test_context);
+        test_context.add_imports_from(&[&base_test_context]);
 
         let (mut global, mut context, parsed_source) = module_context(&test_context);
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
@@ -2053,11 +2158,107 @@ mod tests {
         let (_, mut base_context, _) = module_context(&base_test_context);
 
         let mut test_context = parse_from_string("extends-interface.ts", &src);
-        test_context.add_imports_from(&base_test_context);
+        test_context.add_imports_from(&[&base_test_context]);
 
         let (mut global, mut context, parsed_source) = module_context(&test_context);
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.var_descriptors.len(), 3);
+    }
+
+    #[test]
+    fn extends_imported_interface_which_extends_and_imports() {
+        let team_id = "
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+        ";
+        let base = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface C { cvalue: TeamId; }
+            export interface B extends C { bvalue: string; }
+        ";
+        let src = "
+            import { B } from \"./base-interface.ts\";
+            export interface A extends B { avalue: string; }
+        ";
+        let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
+        let mut base_test_context = parse_from_string("base-interface.ts", &base);
+        let (_, mut team_id_context, _) = module_context(&team_id_test_context);
+        let (_, mut base_context, _) = module_context(&base_test_context);
+
+        let mut test_context = parse_from_string("extends-interface.ts", &src);
+
+        test_context.add_imports_from(&[&base_test_context, &team_id_test_context]);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+        global.debug_print = true;
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.var_descriptors.len(), 3);
+    }
+
+    #[test]
+    fn extends_imported_interface_which_extends_readonly_of_and_imports_twice() {
+        let team_id = "
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+        ";
+        let base = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface C { cvalue: TeamId; }
+            export interface B extends C { bvalue: string; }
+        ";
+        let src = "
+            import { B } from \"./base-interface.ts\";
+            export interface A extends Readonly<B> { avalue: string; }
+        ";
+        let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
+        let mut base_test_context = parse_from_string("base-interface.ts", &base);
+        let (_, mut team_id_context, _) = module_context(&team_id_test_context);
+        let (_, mut base_context, _) = module_context(&base_test_context);
+
+        let mut test_context = parse_from_string("extends-interface.ts", &src);
+
+        test_context.add_imports_from(&[&base_test_context, &team_id_test_context]);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+        global.debug_print = true;
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.var_descriptors.len(), 3);
+    }
+
+    #[test]
+    fn extends_imported_interface_which_extends_and_imports_readonly() {
+        let team_id = "
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+        ";
+        let base = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface C { readonly cvalue: TeamId; }
+            export interface B extends C { bvalue: string; }
+        ";
+        let src = "
+            import { B } from \"./base-interface.ts\";
+            export interface A extends B { avalue: string; }
+        ";
+        let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
+        let mut base_test_context = parse_from_string("base-interface.ts", &base);
+        let (_, mut team_id_context, _) = module_context(&team_id_test_context);
+        let (_, mut base_context, _) = module_context(&base_test_context);
+
+        let mut test_context = parse_from_string("extends-interface.ts", &src);
+
+        test_context.add_imports_from(&[&base_test_context, &team_id_test_context]);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+        global.debug_print = true;
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 3);
@@ -2147,12 +2348,31 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn readonly_property() {
+    fn readonly_of_property() {
         let src = "
             interface A {
                 a: true;
                 // not supported, (what is the gdscript class name?)
                 b: Readonly<B>
+            }
+            interface B {
+                b: true;
+                c: true
+            }
+        ";
+        let mut test_context = parse_from_string("readonly-property.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        get_mc_intf_export(&mut context, &parsed_source);
+    }
+
+    #[test]
+    #[should_panic]
+    fn readonly_property() {
+        let src = "
+            interface A {
+                a: true;
+                // not supported, (what is the gdscript class name?)
+                readonly b: B
             }
             interface B {
                 b: true;

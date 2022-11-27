@@ -8,6 +8,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "typescript-to-gdscript",
+      "sourceLanguages": ["rust"],
       "cargo": {
         "args": [
           "build",
@@ -32,6 +33,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "unit tests",
+      "sourceLanguages": ["rust"],
       "cargo": {
         "args": [
           "test",
