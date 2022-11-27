@@ -1914,7 +1914,7 @@ mod tests {
         );
         assert_eq!(
             vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
-            " != null else 0f"
+            " != null else 0.0"
         );
         assert_eq!(
             vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),

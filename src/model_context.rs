@@ -62,7 +62,7 @@ lazy_static! {
             // unfortunately there's no way to make them nullable.
             ("String", "\"\""),
             ("int", "0"),
-            ("float", "0f"),
+            ("float", "0.0"),
             ("bool", "false"),
             ("any", "null"),
         ] {
