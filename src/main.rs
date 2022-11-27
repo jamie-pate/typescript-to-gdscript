@@ -583,16 +583,16 @@ fn get_extends_intf_model(
 ) -> Vec<ModelVarDescriptor> {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
-        global.stack.push(format!("Searching for {}", id.0));
+        global.stack.push(format!("Searching for {}", &id.0));
         let (mut resolved, mut import_context) = if let Some((t, import_context)) =
             resolve_interface_specifier_type(global, context, &id)
         {
             (t, import_context)
         } else if &id.0 == "Omit" {
-            let (args, arg0Id) = generic_type_arg0_ident(global, context, &id, expr);
+            let (args, arg_0_id) = generic_type_arg0_ident(global, context, &id, expr);
 
             let (mut t, mut import_context) =
-                resolve_interface_specifier_type(global, context, &arg0Id).expect(&format!(
+                resolve_interface_specifier_type(global, context, &arg_0_id).expect(&format!(
                     "Expect Omit<T,...>'s T to resolve to an Interface\n{}",
                     global.get_info(context)
                 ));
@@ -606,9 +606,8 @@ fn get_extends_intf_model(
             );
             (t, None)
         } else if &id.0 == "Readonly" {
-            let (_, arg0Id) = generic_type_arg0_ident(global, context, &id, expr);
-
-            resolve_interface_specifier_type(global, context, &arg0Id)
+            let (_, arg_0_id) = generic_type_arg0_ident(global, context, &id, expr);
+            resolve_interface_specifier_type(global, context, &arg_0_id)
                 .expect("Expect Readonly<T>'s T to resolve to an Interface")
         } else {
             if global.debug_print {
@@ -651,6 +650,7 @@ fn get_extends_intf_model(
         );
         intf_context.pos.pop();
         global.stack.pop();
+
         r.var_descriptors
     } else {
         panic!(
@@ -685,6 +685,8 @@ fn get_intf_model(
         },
         context.relative_filepath
     ));
+    context.pos.push(intf.span);
+    context.pos.pop();
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
         .body
@@ -701,25 +703,28 @@ fn get_intf_model(
             }
         })
         .collect::<Vec<_>>();
+    let var_names = intf_var_descriptors.iter().map(|d|d.src_name.clone()).collect::<HashSet<_>>();
     let extended_descriptor_iterator = intf
         .extends
         .iter()
         .map(|e| get_extends_intf_model(global, context, e, &intf.id))
-        .flatten();
+        .flatten()
+        .filter(|d|!var_names.contains(&d.src_name));
     let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
         .collect();
     let enums: Vec<_> = var_descriptors
         .iter_mut()
-        .map(|v| v.enums.drain(..))
+        .map(|v| v.enums.iter())
         .flatten()
+        .map(|e| e.clone())
         .collect();
     for import in var_descriptors
         .iter_mut()
-        .map(|v| v.imports.drain(..))
+        .map(|v| v.imports.iter())
         .flatten()
     {
-        import_map.insert(import.name.clone(), import);
+        import_map.insert(import.name.clone(), import.clone());
     }
     let mut imports: Vec<_> = import_map.into_values().collect();
     imports.sort_by(|a, b| {
@@ -2230,6 +2235,42 @@ mod tests {
         context.pos.push(export.span);
         let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
         assert_eq!(model.var_descriptors.len(), 3);
+        assert_eq!(model.imports.len(), 0);
+    }
+
+    #[test]
+    fn extends_imported_interface_which_extends_readonly_of_and_imports_twice_with_intf_members() {
+        // this interface would generate a gdscript class that we need to import
+        let d_interface = "
+            export interface D {
+                value: String;
+            }
+        ";
+        let base = "
+            import { D } from \"d-interface.ts\";
+            export interface C { d: D; overridden_value: string }
+            export interface B extends C { overridden_value: string; }
+        ";
+        let src = "
+            import { B } from \"./base-interface.ts\";
+            export interface A extends Readonly<B> { avalue: string; }
+        ";
+        let mut d_test_context = parse_from_string("d-interface.ts", d_interface);
+        let mut base_test_context = parse_from_string("base-interface.ts", &base);
+        let (_, mut d_context, _) = module_context(&d_test_context);
+        let (_, mut base_context, _) = module_context(&base_test_context);
+
+        let mut test_context = parse_from_string("extends-interface.ts", &src);
+
+        test_context.add_imports_from(&[&base_test_context, &d_test_context]);
+
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+        global.debug_print = true;
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.var_descriptors.len(), 3);
+        assert_eq!(model.imports.len(), 1);
     }
 
     #[test]
