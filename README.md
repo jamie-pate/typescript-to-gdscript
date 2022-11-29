@@ -52,7 +52,11 @@ Call this method to convert the object back into a `Dictionary` so it can be ser
 
 #### `func is_set(property_name: String) -> bool`:
 
-Check to see if an optional property was set. * This method is necessary to avoid overriding `_get` and `_set` and `_get_property_list`, which are kind of broken in Godot 3.
+Check to see if an optional property was set.
+
+#### `func unset(property_name: String) -> void`:
+
+Unset an optional property.
 
 #### `func is_null(property_name: String) -> bool`:
 
@@ -67,6 +71,10 @@ Set a property to null.
 #### `func is_initialized() -> bool`:
 
 Returns true when `update()` has been called with a non-empty `Dictionary`
+
+#### `func keys() -> Array`:
+
+Returns the set of keys where `is_set(key)` would return true
 
 ## Directives
 

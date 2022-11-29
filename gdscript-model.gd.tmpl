@@ -25,10 +25,18 @@ enum {enum.name} \{
 {{ if var_decl.comment -}}
 # {var_decl.comment}
 {{ endif -}}
-var {var_decl.name}{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}{{ if var_decl.decl_init }} = {var_decl.decl_init} {{ endif }}
+var {var_decl.name}{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif -}}
+	{{- if var_decl.decl_init }} = {var_decl.decl_init}
+	{{- endif -}}
+	{{- if var_decl.optional }} setget __set_{var_decl.name}{{ endif }}
 {{ endfor }}
-func _init(src: { src_type.name } {{if src_type.init }}= {src_type.init}{{ endif }}) -> void:
+func _init(src: { src_type.name } {{ if src_type.init }}= {src_type.init}{{ endif }}) -> void:
 	update(src)
+{{ for var_decl in var_descriptors }}{{ if var_decl.optional }}
+func __set_{var_decl.name}(value{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}):
+	__assigned_properties.{var_decl.name} = true if typeof(value) != TYPE_NIL else null
+	{var_decl.name} = value
+{{ endif }}{{ endfor }}
 
 func update(src: { src_type.name }) -> void:
 	# custom import logic can be added by overriding this function

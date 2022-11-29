@@ -13,6 +13,10 @@ var __assigned_properties = {}
 var __initialized = false";
 
 pub const STATE_METHODS: &'static str = "\
+# Unset a property (as if it was never assigned)
+func unset(property_name) -> void:
+    __assigned_properties.erase(property_name)
+
 # Checks to see whether an optional property has been assigned or not.
 # Works for non-optional properties too though if update() has been called
 # then they should always be true.
@@ -32,7 +36,11 @@ func set_null(property_name: String) -> void:
 
 # True if update() has been called
 func is_initialized() -> bool:
-    return __initialized";
+    return __initialized
+
+# Keys where is_set(key) returns true
+func keys() -> Array:
+    return __assigned_properties.keys() if __initialized else []";
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ModelImportContext {
@@ -120,10 +128,10 @@ impl ModelValueCtor {
             end: if !nullable {
                 rparen_str.to_string()
             } else {
-                format!("{} if ", rparen_str)
+                format!("{} if typeof(", rparen_str)
             },
             suffix: if nullable {
-                Some(format!(" != null else {}", null_value))
+                Some(format!(") != TYPE_NIL else {}", null_value))
             } else {
                 None
             },
@@ -140,7 +148,7 @@ pub struct ModelValueCtor {
     pub end: String,
     // suffix such for cases where we need to put the input value in twice
     // usage: `{ctor.start}__value__{ctor.end}{{if ctor.suffix}}__value__{ctor.suffix}{{endif}}
-    // for cases like `T.new(__value__) if __value != null else null`
+    // for cases like `T.new(__value__) if typeof(__value__) != TYPE_NIL else null`
     pub suffix: Option<String>,
 }
 
@@ -156,7 +164,7 @@ impl ModelValueForJson {
         let (null_test_start, null_test_end) = if builtin {
             (" if !is_null(\"", "\")")
         } else {
-            (" if ", " != null")
+            (" if typeof(", ") != TYPE_NIL")
         };
         ModelValueForJson {
             name: name.to_string(),
@@ -341,7 +349,7 @@ impl ModelVarDescriptor {
             self.ctor.suffix.is_some()
         };
         let assigned_value = if src_nullable {
-            format!("true if {src_specifier} != null else null")
+            format!("true if typeof({src_specifier}) != TYPE_NIL else null")
         } else {
             "true".to_string()
         };
@@ -364,7 +372,7 @@ impl ModelVarDescriptor {
             ));
             if collection.nullable {
                 parts.push(add_indent(
-                    format!("if {src_specifier} != null:"),
+                    format!("if typeof({src_specifier}) != TYPE_NIL:"),
                     indent,
                     indent_level,
                 ));
@@ -769,8 +777,8 @@ pub mod tests {
             rendered,
             indent(
                 "\
-                __assigned_properties.prop_name = true if src.propName != null else null\n\
-                prop_name = Intf.new(src.propName) if src.propName != null else null\
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
+                prop_name = Intf.new(src.propName) if typeof(src.propName) != TYPE_NIL else null\
             "
                 .to_string()
             )
@@ -802,8 +810,8 @@ pub mod tests {
             rendered,
             indent(
                 "\
-                __assigned_properties.prop_name = true if src.propName != null else null\n\
-                prop_name = src.propName if src.propName != null else \"\"\
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
+                prop_name = src.propName if typeof(src.propName) != TYPE_NIL else \"\"\
             "
                 .to_string()
             )
@@ -832,8 +840,8 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
-                {ws}prop_name = Intf.new(src.propName) if src.propName != null else null\
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = Intf.new(src.propName) if typeof(src.propName) != TYPE_NIL else null\
             "})
         );
     }
@@ -863,8 +871,8 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
-                {ws}prop_name = src.propName if src.propName != null else \"\"\
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = src.propName if typeof(src.propName) != TYPE_NIL else \"\"\
             "})
         );
     }
@@ -926,9 +934,9 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = []
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __item__ in src.propName:
                 {ws}{ws}var __value__ = Intf.new(__item__)
                 {ws}{ws}prop_name.append(__value__)\
@@ -949,9 +957,9 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = {{}}
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __key__ in src.propName:
                 {ws}{ws}var __value__ = src.propName[__key__]
                 {ws}{ws}prop_name[__key__] = Intf.new(__value__)\
@@ -972,11 +980,11 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = []
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __item__ in src.propName:
-                {ws}{ws}var __value__ = Intf.new(__item__) if __item__ != null else null
+                {ws}{ws}var __value__ = Intf.new(__item__) if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}prop_name.append(__value__)\
             "})
         );
@@ -995,12 +1003,12 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = {{}}
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __key__ in src.propName:
                 {ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
+                {ws}{ws}prop_name[__key__] = Intf.new(__value__) if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1019,11 +1027,11 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = []
-                {ws}if src.propName != null:
+                {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __item__ in src.propName:
-                {ws}{ws}{ws}var __value__ = Intf.new(__item__) if __item__ != null else null
+                {ws}{ws}{ws}var __value__ = Intf.new(__item__) if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
@@ -1043,12 +1051,12 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = {{}}
-                {ws}if src.propName != null:
+                {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __key__ in src.propName:
                 {ws}{ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__) if __value__ != null else null\
+                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__) if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1069,11 +1077,11 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = []
-                {ws}if src.propName != null:
+                {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __item__ in src.propName:
-                {ws}{ws}{ws}var __value__ = __item__ if __item__ != null else null
+                {ws}{ws}{ws}var __value__ = __item__ if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
@@ -1093,12 +1101,12 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if src.propName in src:
-                {ws}__assigned_properties.prop_name = true if src.propName != null else null
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = {{}}
-                {ws}if src.propName != null:
+                {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __key__ in src.propName:
                 {ws}{ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}{ws}prop_name[__key__] = __value__ if __value__ != null else null\
+                {ws}{ws}{ws}prop_name[__key__] = __value__ if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1126,7 +1134,7 @@ pub mod tests {
             rendered,
             indent(
                 "\
-                result.propName = prop_name.for_json() if prop_name != null else null\
+                result.propName = prop_name.for_json() if typeof(prop_name) != TYPE_NIL else null\
             "
                 .to_string()
             )
@@ -1185,7 +1193,7 @@ pub mod tests {
             rendered,
             indent(formatdoc! {"
                 if is_set(\"prop_name\"):
-                {ws}result.propName = prop_name.for_json() if prop_name != null else null\
+                {ws}result.propName = prop_name.for_json() if typeof(prop_name) != TYPE_NIL else null\
             "})
         );
     }
@@ -1327,7 +1335,7 @@ pub mod tests {
                 else:
                 {ws}result.propName = []
                 {ws}for __item__ in prop_name:
-                {ws}{ws}var __value__ = __item__.for_json() if __item__ != null else null
+                {ws}{ws}var __value__ = __item__.for_json() if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}result.propName.append(__value__)\
             "})
         );
@@ -1352,7 +1360,7 @@ pub mod tests {
                 {ws}result.propName = {{}}
                 {ws}for __key__ in prop_name:
                 {ws}{ws}var __value__ = prop_name[__key__]
-                {ws}{ws}result.propName[__key__] = __value__.for_json() if __value__ != null else null\
+                {ws}{ws}result.propName[__key__] = __value__.for_json() if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1376,7 +1384,7 @@ pub mod tests {
                 {ws}else:
                 {ws}{ws}result.propName = []
                 {ws}{ws}for __item__ in prop_name:
-                {ws}{ws}{ws}var __value__ = __item__.for_json() if __item__ != null else null
+                {ws}{ws}{ws}var __value__ = __item__.for_json() if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
@@ -1402,7 +1410,7 @@ pub mod tests {
                 {ws}{ws}result.propName = {{}}
                 {ws}{ws}for __key__ in prop_name:
                 {ws}{ws}{ws}var __value__ = prop_name[__key__]
-                {ws}{ws}{ws}result.propName[__key__] = __value__.for_json() if __value__ != null else null\
+                {ws}{ws}{ws}result.propName[__key__] = __value__.for_json() if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1428,7 +1436,7 @@ pub mod tests {
                 {ws}else:
                 {ws}{ws}result.propName = []
                 {ws}{ws}for __item__ in prop_name:
-                {ws}{ws}{ws}var __value__ = __item__ if __item__ != null else null
+                {ws}{ws}{ws}var __value__ = __item__ if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
@@ -1454,7 +1462,7 @@ pub mod tests {
                 {ws}{ws}result.propName = {{}}
                 {ws}{ws}for __key__ in prop_name:
                 {ws}{ws}{ws}var __value__ = prop_name[__key__]
-                {ws}{ws}{ws}result.propName[__key__] = __value__ if __value__ != null else null\
+                {ws}{ws}{ws}result.propName[__key__] = __value__ if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1478,15 +1486,15 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = {{}}
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __key__ in src.propName:
                 {ws}{ws}var __value__ = src.propName[__key__]
                 {ws}{ws}var __coll__ = []
                 {ws}{ws}prop_name[__key__] = __coll__
                 {ws}{ws}for __item__1 in __value__:
-                {ws}{ws}{ws}var __value__1 = B.new(__item__1) if __item__1 != null else null
+                {ws}{ws}{ws}var __value__1 = B.new(__item__1) if typeof(__item__1) != TYPE_NIL else null
                 {ws}{ws}{ws}__coll__.append(__value__1)\
                 "}
                 .to_string()
@@ -1513,15 +1521,15 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = []
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __item__ in src.propName:
                 {ws}{ws}var __coll__ = {{}}
                 {ws}{ws}prop_name.append(__coll__)
                 {ws}{ws}for __key__1 in __item__:
                 {ws}{ws}{ws}var __value__1 = __item__[__key__1]
-                {ws}{ws}{ws}__coll__[__key__1] = B.new(__value__1) if __value__1 != null else null\
+                {ws}{ws}{ws}__coll__[__key__1] = B.new(__value__1) if typeof(__value__1) != TYPE_NIL else null\
                 "}
                 .to_string()
             )
@@ -1547,15 +1555,15 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if src.propName != null else null
+                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 prop_name = {{}}
-                if src.propName != null:
+                if typeof(src.propName) != TYPE_NIL:
                 {ws}for __key__ in src.propName:
                 {ws}{ws}var __value__ = src.propName[__key__]
                 {ws}{ws}var __coll__ = []
                 {ws}{ws}prop_name[__key__] = __coll__
                 {ws}{ws}for __item__1 in __value__:
-                {ws}{ws}{ws}var __value__1 = __item__1 if __item__1 != null else null
+                {ws}{ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
                 {ws}{ws}{ws}__coll__.append(__value__1)\
                 "}
                 .to_string()
@@ -1587,7 +1595,7 @@ pub mod tests {
                 {ws}var __coll__ = []
                 {ws}result.propName[__key__] = __coll__
                 {ws}for __item__1 in __value__:
-                {ws}{ws}var __value__1 = __item__1.for_json() if __item__1 != null else null
+                {ws}{ws}var __value__1 = __item__1.for_json() if typeof(__item__1) != TYPE_NIL else null
                 {ws}{ws}__coll__.append(__value__1)\
             "})
         );
@@ -1617,7 +1625,7 @@ pub mod tests {
                 {ws}result.propName.append(__coll__)
                 {ws}for __key__1 in __item__:
                 {ws}{ws}var __value__1 = __item__[__key__1]
-                {ws}{ws}__coll__[__key__1] = __value__1.for_json() if __value__1 != null else null\
+                {ws}{ws}__coll__[__key__1] = __value__1.for_json() if typeof(__value__1) != TYPE_NIL else null\
             "})
         );
     }
@@ -1646,7 +1654,7 @@ pub mod tests {
                 {ws}var __coll__ = []
                 {ws}result.propName[__key__] = __coll__
                 {ws}for __item__1 in __value__:
-                {ws}{ws}var __value__1 = __item__1 if __item__1 != null else null
+                {ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
                 {ws}{ws}__coll__.append(__value__1)\
             "})
         );

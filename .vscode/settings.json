@@ -1,5 +1,6 @@
 {
   "editor.inlayHints.enabled": "offUnlessPressed",
   "editor.inlayHints.fontSize": 9,
-  "lldb.showDisassembly": "never"
+  "lldb.showDisassembly": "never",
+  "deno.enable": true
 }

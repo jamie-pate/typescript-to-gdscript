@@ -1943,19 +1943,19 @@ mod tests {
         }
         assert_eq!(
             vars.get("str").unwrap().ctor.suffix.as_ref().unwrap(),
-            " != null else \"\""
+            ") != TYPE_NIL else \"\""
         );
         assert_eq!(
             vars.get("int").unwrap().ctor.suffix.as_ref().unwrap(),
-            " != null else 0"
+            ") != TYPE_NIL else 0"
         );
         assert_eq!(
             vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
-            " != null else 0.0"
+            ") != TYPE_NIL else 0.0"
         );
         assert_eq!(
             vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),
-            " != null else false"
+            ") != TYPE_NIL else false"
         );
     }
 
@@ -2019,11 +2019,11 @@ mod tests {
         );
         assert_eq!(
             opt_a_of_str_or_null.ctor.suffix.as_ref().unwrap(),
-            " != null else \"\""
+            ") != TYPE_NIL else \"\""
         );
         assert_eq!(
             opt_a_of_member_or_null.ctor.suffix.as_ref().unwrap(),
-            " != null else null"
+            ") != TYPE_NIL else null"
         );
     }
 
