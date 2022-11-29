@@ -85,7 +85,8 @@ Comments can contain directives to help out with conversion
 * `Readonly<T>`: Readonly is discarded and T is used. (This only works with the extends keyword)
 * `Date`: Must supply an `Iso8601Date` class to handle the ISO8601 timestamp string from the json value.
 * `Array<T>`: Treated the same as `T[]`
-* `Record<K, T>`: Treated as a Dictionary of `<string, T>`
+* `Record<K, T>`: Treated as a Dictionary of `<string, T>` since that's what JSON will supply.
+* `Array<Record<K,T>>`, `Record<K,Array<T>>` and other nested combinations are supported.
 
 ## Templates
 

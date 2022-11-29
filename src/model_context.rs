@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, string};
 
 use deno_ast::swc::ast::TsEnumDecl;
 use indoc::formatdoc;
@@ -44,11 +44,34 @@ pub struct ModelImportContext {
 // Extra template data that's required if the variable is an array or dictionary
 #[derive(Serialize, Debug, Clone)]
 pub struct ModelVarCollection {
-    // Initial value (empty array, dict, PoolStringArray, etc)
-    pub init: String,
+    // TODO: probably should be an enum? Dict|Array?
     pub is_array: bool,
     pub is_dict: bool,
     pub nullable: bool,
+    // If item_collection is not None, then this is a nested collection
+    pub item_collection: Option<Box<ModelVarCollection>>,
+}
+
+impl ModelVarCollection {
+    pub fn init(&self) -> &str {
+        if self.is_array {
+            "[]"
+        } else if self.is_dict {
+            "{}"
+        } else {
+            panic!("Must be array or dict");
+        }
+    }
+
+    pub fn gd_type(&self) -> &str {
+        if self.is_array {
+            "Array"
+        } else if self.is_dict {
+            "Dictionary"
+        } else {
+            panic!("Must be array or dict");
+        }
+    }
 }
 
 lazy_static! {
@@ -207,6 +230,104 @@ impl ModelVarDescriptor {
             for_json: self.render_for_json(indent),
         }
     }
+
+    fn render_init_item_collection(
+        &self,
+        collection: &ModelVarCollection,
+        level: usize,
+        src_specifier: &str,
+        dest_specifier: &str,
+        indent_level: usize,
+        init_parts: &Vec<String>,
+        parts: &mut Vec<String>,
+        indent: &str,
+    ) {
+        let ws = indent;
+        // TODO: PoolStringArray, PoolIntArray etc?
+        let mut level_init_parts = init_parts.clone();
+        let maybe_suffix = if collection.item_collection.is_none() {
+            ModelValueCtor::new("__nullable__", self.ctor.suffix.is_some()).suffix
+        } else {
+            None
+        };
+        if let Some(suffix) = maybe_suffix {
+            level_init_parts.push(suffix);
+        }
+        // level suffix
+        let ls = if level > 0 {
+            level.to_string()
+        } else {
+            "".to_string()
+        };
+
+        let (mut collection_specifier, mut init_value) =
+            if let Some(ic) = &collection.item_collection {
+                (format!("__coll__{ls}"), ic.init().to_string())
+            } else {
+                ("".to_string(), "".to_string())
+            };
+        let mut next_src_specifier = "".to_string();
+        let mut next_dest_specifier = "".to_string();
+        if collection.is_array {
+            if init_value.is_empty() {
+                init_value = level_init_parts.join(&format!("__item__{ls}"));
+            }
+            if collection_specifier.is_empty() {
+                collection_specifier = format!("__value__{ls}");
+            }
+            parts.push(add_indent(
+                formatdoc! {"
+                for __item__{ls} in {src_specifier}:
+                {ws}var {collection_specifier} = {init_value}
+                {ws}{dest_specifier}.append({collection_specifier})"},
+                indent,
+                indent_level,
+            ));
+            (next_src_specifier, next_dest_specifier) =
+                (format!("__item__{ls}"), collection_specifier);
+        } else if collection.is_dict {
+            if init_value.is_empty() {
+                init_value = level_init_parts.join(&format!("__value__{ls}"));
+            };
+            parts.push(add_indent(
+                formatdoc! {"
+                        for __key__{ls} in {src_specifier}:
+                        {ws}var __value__{ls} = {src_specifier}[__key__{ls}]"},
+                indent,
+                indent_level,
+            ));
+            parts.push(add_indent(
+                if collection_specifier.is_empty() {
+                    formatdoc! {"{ws}{dest_specifier}[__key__{ls}] = {init_value}"}
+                } else {
+                    formatdoc! {"
+                        {ws}var {collection_specifier} = {init_value}
+                        {ws}{dest_specifier}[__key__{ls}] = {collection_specifier}"
+                    }
+                },
+                indent,
+                indent_level,
+            ));
+            (next_src_specifier, next_dest_specifier) =
+                (format!("__value__{ls}"), collection_specifier);
+        } else {
+            panic!("This should never happen");
+        }
+        if let Some(item_collection) = &collection.item_collection {
+            // nested container uses recursive calls to render
+            self.render_init_item_collection(
+                item_collection,
+                level + 1,
+                &next_src_specifier,
+                &next_dest_specifier,
+                indent_level + 1,
+                &init_parts,
+                parts,
+                indent,
+            );
+        }
+    }
+
     pub fn render_init(&self, indent: &str) -> String {
         let ws = DEFAULT_INDENT;
         let src = "src";
@@ -224,20 +345,14 @@ impl ModelVarDescriptor {
         } else {
             "true".to_string()
         };
-        let get_init_value = |specifier, maybe_suffix: &Option<String>| {
-            if let Some(suffix) = maybe_suffix {
-                format!("{ctor_start}{specifier}{ctor_end}{specifier}{suffix}")
-            } else {
-                format!("{ctor_start}{specifier}{ctor_end}")
-            }
-        };
+        let mut init_parts: Vec<String> = vec![ctor_start.into(), ctor_end.into()];
         let mut indent_level = 0;
         if self.optional {
             parts.push(format!("if {src_specifier} in {src}:"));
             indent_level += 1;
         }
         if let Some(collection) = &self.collection {
-            let c_init = &collection.init;
+            let c_init = collection.init();
 
             parts.push(add_indent(
                 formatdoc! {"
@@ -255,37 +370,21 @@ impl ModelVarDescriptor {
                 ));
                 indent_level += 1;
             }
-
-            // TODO: PoolStringArray, PoolIntArray etc?
-            let maybe_suffix =
-                ModelValueCtor::new("__nullable__", self.ctor.suffix.is_some()).suffix;
-            if collection.is_array {
-                let init_value = get_init_value("__item__", &maybe_suffix);
-                parts.push(add_indent(
-                    formatdoc! {"
-                        for __item__ in {src_specifier}:
-                        {ws}var __value__ = {init_value}
-                        {ws}{name}.append(__value__)"
-                    },
-                    indent,
-                    indent_level,
-                ));
-            } else if collection.is_dict {
-                let init_value = get_init_value("__value__", &maybe_suffix);
-                parts.push(add_indent(
-                    formatdoc! {"
-                        for __key__ in {src_specifier}:
-                        {ws}var __value__ = {src_specifier}[__key__]
-                        {ws}{name}[__key__] = {init_value}"
-                    },
-                    indent,
-                    indent_level,
-                ))
-            } else {
-                panic!("This should never happen");
-            }
+            self.render_init_item_collection(
+                collection,
+                0,
+                &src_specifier,
+                name,
+                indent_level,
+                &mut init_parts,
+                &mut parts,
+                indent,
+            );
         } else {
-            let init_value = get_init_value(&src_specifier, &self.ctor.suffix);
+            if let Some(suffix) = &self.ctor.suffix {
+                init_parts.push(suffix.to_string());
+            }
+            let init_value: String = init_parts.join(&src_specifier);
             parts.push(add_indent(
                 formatdoc! {"
                 __assigned_properties.{name} = {assigned_value}
@@ -316,6 +415,126 @@ impl ModelVarDescriptor {
             .join("\n")
     }
 
+    fn specifier_for_json(
+        &self,
+        specifier: &str,
+        for_json_call: &str,
+        maybe_suffix: &Option<(String, String)>,
+    ) -> String {
+        let for_json_parts: Vec<String> =
+            if let Some((null_check_start, null_check_end)) = maybe_suffix {
+                vec![
+                    "".to_string(),
+                    format!("{for_json_call}{null_check_start}"),
+                    null_check_end.to_string(),
+                ]
+            } else {
+                vec!["".to_string(), for_json_call.to_string()]
+            };
+        return for_json_parts.join(specifier);
+    }
+
+    fn render_for_json_item_collection(
+        &self,
+        collection: &ModelVarCollection,
+        level: usize,
+        src_specifier: &str,
+        dest_specifier: &str,
+        indent_level: usize,
+        parts: &mut Vec<String>,
+        indent: &str,
+    ) {
+        let ws = indent;
+        // TODO: PoolStringArray, PoolIntArray etc?
+        let maybe_suffix = if collection.item_collection.is_none() {
+            ModelValueForJson::new("__nullable__", self.for_json.suffix.is_some()).suffix
+        } else {
+            None
+        };
+        // level suffix
+        let ls = if level > 0 {
+            level.to_string()
+        } else {
+            "".to_string()
+        };
+
+        let (mut collection_specifier, mut for_json_value) =
+            if let Some(ic) = &collection.item_collection {
+                (format!("__coll__{ls}"), ic.init().to_string())
+            } else {
+                ("".to_string(), "".to_string())
+            };
+        let mut next_src_specifier = "".to_string();
+        let mut next_dest_specifier = "".to_string();
+        let for_json_call = &self.for_json.for_json_call;
+        if collection.is_array {
+            if for_json_value.is_empty() {
+                for_json_value =
+                    self.specifier_for_json(&format!("__item__{ls}"), for_json_call, &maybe_suffix);
+            }
+            if collection_specifier.is_empty() {
+                collection_specifier = format!("__value__{ls}");
+            }
+
+            parts.push(add_indent(
+                formatdoc! {"
+                    for __item__{ls} in {src_specifier}:
+                    {ws}var {collection_specifier} = {for_json_value}
+                    {ws}{dest_specifier}.append({collection_specifier})"
+                },
+                indent,
+                indent_level,
+            ));
+            (next_src_specifier, next_dest_specifier) =
+                (format!("__item__{ls}"), collection_specifier);
+        } else if collection.is_dict {
+            if for_json_value.is_empty() {
+                for_json_value = self.specifier_for_json(
+                    &format!("__value__{ls}"),
+                    for_json_call,
+                    &maybe_suffix,
+                );
+            }
+
+            parts.push(add_indent(
+                formatdoc! {"
+                    for __key__{ls} in {src_specifier}:
+                    {ws}var __value__{ls} = {src_specifier}[__key__{ls}]"
+                },
+                indent,
+                indent_level,
+            ));
+            parts.push(add_indent(
+                if collection_specifier.is_empty() {
+                    formatdoc! {"{ws}{dest_specifier}[__key__{ls}] = {for_json_value}"}
+                } else {
+                    formatdoc! {
+                        "{ws}var {collection_specifier} = {for_json_value}
+                        {ws}{dest_specifier}[__key__{ls}] = {collection_specifier}"
+                    }
+                },
+                indent,
+                indent_level,
+            ));
+            (next_src_specifier, next_dest_specifier) =
+                (format!("__value__{ls}"), collection_specifier);
+        } else {
+            panic!("This should never happen");
+        }
+        if let Some(item_collection) = &collection.item_collection {
+            // nested container uses recursive calls to render
+            self.render_for_json_item_collection(
+                item_collection,
+                level + 1,
+                &next_src_specifier,
+                &next_dest_specifier,
+                indent_level + 1,
+                parts,
+                indent,
+            );
+        }
+    }
+
     pub fn render_for_json(&self, indent: &str) -> String {
         let dest = "result";
         let mut parts: Vec<String> = Vec::new();
@@ -327,21 +546,21 @@ impl ModelVarDescriptor {
         } else {
             self.for_json.suffix.is_some()
         };
-        let get_for_json_value = |specifier, maybe_suffix: &Option<(String, String)>| {
-            if let Some((null_check_start, null_check_end)) = maybe_suffix {
-                format!("{specifier}{for_json_call}{null_check_start}{specifier}{null_check_end}")
-            } else {
-                format!("{specifier}{for_json_call}")
-            }
-        };
+
         let mut indent_level = 0;
 
         if self.optional {
             parts.push(format!("if is_set(\"{name}\"):"));
             indent_level += 1;
         }
+        let nullable = ModelValueForJson::new("__nullable__", self.for_json.suffix.is_some());
+        let maybe_suffix = if self.collection.is_some() {
+            &nullable.suffix
+        } else {
+            &self.for_json.suffix
+        };
         if let Some(collection) = &self.collection {
-            let c_init = &collection.init;
+            let c_init = &collection.init();
             let ws = DEFAULT_INDENT;
 
             if collection.nullable {
@@ -362,37 +581,18 @@ impl ModelVarDescriptor {
                 indent,
                 indent_level,
             ));
-
             // TODO: PoolStringArray, PoolIntArray etc?
-            let maybe_suffix =
-                ModelValueForJson::new("__nullable__", self.for_json.suffix.is_some()).suffix;
-            if collection.is_array {
-                let for_json_value = get_for_json_value("__item__", &maybe_suffix);
-                parts.push(add_indent(
-                    formatdoc! {"
-                        for __item__ in {name}:
-                        {ws}var __value__ = {for_json_value}
-                        {ws}{dest_specifier}.append(__value__)"
-                    },
-                    indent,
-                    indent_level,
-                ));
-            } else if collection.is_dict {
-                let for_json_value = get_for_json_value("__value__", &maybe_suffix);
-                parts.push(add_indent(
-                    formatdoc! {"
-                        for __key__ in {name}:
-                        {ws}var __value__ = {name}[__key__]
-                        {ws}{dest_specifier}[__key__] = {for_json_value}"
-                    },
-                    indent,
-                    indent_level,
-                ))
-            } else {
-                panic!("This should never happen");
-            }
+            self.render_for_json_item_collection(
+                collection,
+                0,
+                &name,
+                &dest_specifier,
+                indent_level,
+                &mut parts,
+                indent,
+            );
         } else {
-            let for_json_value = get_for_json_value(&name, &self.for_json.suffix);
+            let for_json_value = self.specifier_for_json(name, for_json_call, maybe_suffix);
             parts.push(add_indent(
                 formatdoc! {"
                 {dest_specifier} = {for_json_value}"
@@ -469,7 +669,7 @@ pub struct ModelContext {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use convert_case::{Case, Casing};
     use indoc::{formatdoc, indoc};
 
@@ -505,7 +705,7 @@ mod tests {
         }
     }
 
-    fn indent(str: String) -> String {
+    pub fn indent(str: String) -> String {
         add_indent(str, DEFAULT_INDENT, 1)
     }
 
@@ -673,10 +873,10 @@ mod tests {
     fn render_init_array() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: false,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -695,10 +895,10 @@ mod tests {
     fn render_init_dict() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: false,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -717,10 +917,10 @@ mod tests {
     fn render_init_nullable_array() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -740,10 +940,10 @@ mod tests {
     fn render_init_nullable_dict() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -763,10 +963,10 @@ mod tests {
     fn render_init_nullable_array_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -786,10 +986,10 @@ mod tests {
     fn render_init_nullable_dict_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -809,10 +1009,10 @@ mod tests {
     fn render_init_optional_nullable_array_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -833,10 +1033,10 @@ mod tests {
     fn render_init_optional_nullable_dict_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -859,10 +1059,10 @@ mod tests {
     fn render_init_optional_nullable_array_of_builtin_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "int", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -883,10 +1083,10 @@ mod tests {
     fn render_init_optional_nullable_dict_of_builtin_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "int", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
@@ -1023,10 +1223,10 @@ mod tests {
     fn render_for_json_array() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: false,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1044,10 +1244,10 @@ mod tests {
     fn render_for_json_dict() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: false,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1065,10 +1265,10 @@ mod tests {
     fn render_for_json_nullable_array() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1089,10 +1289,10 @@ mod tests {
     fn render_for_json_nullable_dict() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", false);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1113,10 +1313,10 @@ mod tests {
     fn render_for_json_nullable_array_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1137,10 +1337,10 @@ mod tests {
     fn render_for_json_nullable_dict_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", false, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1161,10 +1361,10 @@ mod tests {
     fn render_for_json_optional_nullable_array_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1186,10 +1386,10 @@ mod tests {
     fn render_for_json_optional_nullable_dict_of_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "Intf", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1213,10 +1413,10 @@ mod tests {
     fn render_for_json_optional_nullable_array_of_builtin_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "int", true);
         model.collection = Some(ModelVarCollection {
-            init: "[]".to_string(),
             is_array: true,
             is_dict: false,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1238,10 +1438,10 @@ mod tests {
     fn render_for_json_optional_nullable_dict_of_builtin_nullable() {
         let mut model = ModelVarDescriptor::for_test("propName", true, "int", true);
         model.collection = Some(ModelVarCollection {
-            init: "{}".to_string(),
             is_array: false,
             is_dict: true,
             nullable: true,
+            item_collection: None,
         });
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
@@ -1255,6 +1455,199 @@ mod tests {
                 {ws}{ws}for __key__ in prop_name:
                 {ws}{ws}{ws}var __value__ = prop_name[__key__]
                 {ws}{ws}{ws}result.propName[__key__] = __value__ if __value__ != null else null\
+            "})
+        );
+    }
+
+    #[test]
+    fn render_init_dict_of_arrays() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "B", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: false,
+            is_dict: true,
+            nullable: true,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: true,
+                is_dict: false,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_init(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(
+                formatdoc! {"
+                __assigned_properties.prop_name = true if src.propName != null else null
+                prop_name = {{}}
+                if src.propName != null:
+                {ws}for __key__ in src.propName:
+                {ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}var __coll__ = []
+                {ws}{ws}prop_name[__key__] = __coll__
+                {ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}var __value__1 = B.new(__item__1) if __item__1 != null else null
+                {ws}{ws}{ws}__coll__.append(__value__1)\
+                "}
+                .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn render_init_array_of_dicts() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "B", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: true,
+            is_dict: false,
+            nullable: true,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: false,
+                is_dict: true,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_init(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(
+                formatdoc! {"
+                __assigned_properties.prop_name = true if src.propName != null else null
+                prop_name = []
+                if src.propName != null:
+                {ws}for __item__ in src.propName:
+                {ws}{ws}var __coll__ = {{}}
+                {ws}{ws}prop_name.append(__coll__)
+                {ws}{ws}for __key__1 in __item__:
+                {ws}{ws}{ws}var __value__1 = __item__[__key__1]
+                {ws}{ws}{ws}__coll__[__key__1] = B.new(__value__1) if __value__1 != null else null\
+                "}
+                .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn render_init_dict_of_arrays_of_builtin() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "int", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: false,
+            is_dict: true,
+            nullable: true,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: true,
+                is_dict: false,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_init(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(
+                formatdoc! {"
+                __assigned_properties.prop_name = true if src.propName != null else null
+                prop_name = {{}}
+                if src.propName != null:
+                {ws}for __key__ in src.propName:
+                {ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}var __coll__ = []
+                {ws}{ws}prop_name[__key__] = __coll__
+                {ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}var __value__1 = __item__1 if __item__1 != null else null
+                {ws}{ws}{ws}__coll__.append(__value__1)\
+                "}
+                .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn render_for_json_dict_of_arrays() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "B", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: false,
+            is_dict: true,
+            nullable: false,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: true,
+                is_dict: false,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_for_json(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(formatdoc! {"
+                result.propName = {{}}
+                for __key__ in prop_name:
+                {ws}var __value__ = prop_name[__key__]
+                {ws}var __coll__ = []
+                {ws}result.propName[__key__] = __coll__
+                {ws}for __item__1 in __value__:
+                {ws}{ws}var __value__1 = __item__1.for_json() if __item__1 != null else null
+                {ws}{ws}__coll__.append(__value__1)\
+            "})
+        );
+    }
+
+    #[test]
+    fn render_for_json_array_of_dicts() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "B", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: true,
+            is_dict: false,
+            nullable: false,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: false,
+                is_dict: true,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_for_json(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(formatdoc! {"
+                result.propName = []
+                for __item__ in prop_name:
+                {ws}var __coll__ = {{}}
+                {ws}result.propName.append(__coll__)
+                {ws}for __key__1 in __item__:
+                {ws}{ws}var __value__1 = __item__[__key__1]
+                {ws}{ws}__coll__[__key__1] = __value__1.for_json() if __value__1 != null else null\
+            "})
+        );
+    }
+
+    #[test]
+    fn render_for_json_dict_of_arrays_of_builtin() {
+        let mut model = ModelVarDescriptor::for_test("propName", false, "int", true);
+        model.collection = Some(ModelVarCollection {
+            is_array: false,
+            is_dict: true,
+            nullable: false,
+            item_collection: Some(Box::new(ModelVarCollection {
+                is_array: true,
+                is_dict: false,
+                nullable: true,
+                item_collection: None,
+            })),
+        });
+        let rendered = model.render_for_json(DEFAULT_INDENT);
+        assert_eq!(
+            rendered,
+            indent(formatdoc! {"
+                result.propName = {{}}
+                for __key__ in prop_name:
+                {ws}var __value__ = prop_name[__key__]
+                {ws}var __coll__ = []
+                {ws}result.propName[__key__] = __coll__
+                {ws}for __item__1 in __value__:
+                {ws}{ws}var __value__1 = __item__1 if __item__1 != null else null
+                {ws}{ws}__coll__.append(__value__1)\
             "})
         );
     }

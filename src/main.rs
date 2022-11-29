@@ -23,6 +23,7 @@ use deno_ast::{
     SourceRangedForSpanned, SourceTextInfo,
 };
 
+use lazy_static::__Deref;
 use model_context::{
     is_builtin, ModelContext, ModelEnum, ModelImportContext, ModelSrcType, ModelValueCtor,
     ModelValueForJson, ModelVarCollection, ModelVarDescriptor, DEFAULT_INDENT, STATE_METHODS,
@@ -703,13 +704,16 @@ fn get_intf_model(
             }
         })
         .collect::<Vec<_>>();
-    let var_names = intf_var_descriptors.iter().map(|d|d.src_name.clone()).collect::<HashSet<_>>();
+    let var_names = intf_var_descriptors
+        .iter()
+        .map(|d| d.src_name.clone())
+        .collect::<HashSet<_>>();
     let extended_descriptor_iterator = intf
         .extends
         .iter()
         .map(|e| get_extends_intf_model(global, context, e, &intf.id))
         .flatten()
-        .filter(|d|!var_names.contains(&d.src_name));
+        .filter(|d| !var_names.contains(&d.src_name));
     let mut var_descriptors: Vec<_> = extended_descriptor_iterator
         .chain(intf_var_descriptors)
         .collect();
@@ -1019,13 +1023,16 @@ fn resolve_type(
                 .stack
                 .push(format!("resolve array_type {:?}", array_type));
             let mut result = resolve_type(global, context, &array_type.elem_type);
-            let ctor_type = result.type_name;
-            result.type_name = "Array".to_string();
+            let ctor_type = result.type_name.clone();
+            let collection = result
+                .collection
+                .as_ref()
+                .and_then(|c| Some(Box::new(c.clone())));
             result.collection = Some(ModelVarCollection {
-                init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
                 nullable: false,
+                item_collection: collection,
             });
             result.ctor_type = Some(ctor_type);
             global.stack.pop();
@@ -1096,10 +1103,10 @@ fn resolve_type(
                 );
             }
             result.collection = Some(ModelVarCollection {
-                init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
                 nullable: false,
+                item_collection: None,
             });
             result
         }
@@ -1236,7 +1243,9 @@ fn get_intf_model_var(
                 comment,
                 // all collections and builtin types (so far) are non-nullable
                 non_nullable: resolved.collection.is_some() || ctor.builtin,
-                decl_type: if resolved.type_name != "any" {
+                decl_type: if let Some(c) = &resolved.collection {
+                    Some(c.gd_type().to_string())
+                } else if resolved.type_name != "any" {
                     Some(resolved.type_name)
                 } else {
                     None
@@ -1333,13 +1342,36 @@ fn resolve_local_specifier_type_or_builtin(
             } else {
                 None
             };
+            let collection = ctor_type.as_ref().and_then(|c| {
+                if let Some(coll) = &c.collection {
+                    Some(Box::new(coll.clone()))
+                } else {
+                    None
+                }
+            });
+            let collection = ctor_type
+                .as_ref()
+                .and_then(|ct| ct.collection.as_ref())
+                .and_then(|c| Some(Box::new(c.clone())));
+            let comment = if let Some(ct) = &ctor_type {
+                Some(ct.type_name.clone())
+            } else {
+                None
+            };
             let mut result =
                 ctor_type.unwrap_or_else(|| TypeResolution::new("Dictionary", &type_ref.span));
+            if let Some(c) = comment {
+                result.comment = if let Some(rc) = result.comment {
+                    Some(format!("{rc} {c}"))
+                } else {
+                    Some(c)
+                }
+            }
             result.collection = Some(ModelVarCollection {
-                init: "{}".to_string(),
                 is_array: false,
                 is_dict: true,
                 nullable: false,
+                item_collection: collection,
             });
             result
         }
@@ -1351,13 +1383,17 @@ fn resolve_local_specifier_type_or_builtin(
             } else {
                 None
             };
+            let collection = ctor_type
+                .as_ref()
+                .and_then(|ct| ct.collection.as_ref())
+                .and_then(|c| Some(Box::new(c.clone())));
             let mut result =
                 ctor_type.unwrap_or_else(|| TypeResolution::new("Array", &type_ref.span));
             result.collection = Some(ModelVarCollection {
-                init: "[]".to_string(),
                 is_array: true,
                 is_dict: false,
                 nullable: false,
+                item_collection: collection,
             });
             result
         }
@@ -1688,6 +1724,12 @@ fn detect_indent(template_str: &str, debug_print: bool) -> String {
 mod tests {
     use std::{borrow::Borrow, collections::HashMap, path::PathBuf, rc::Rc};
 
+    use crate::model_context::tests::indent;
+    use crate::{
+        extract_import_specifiers, get_intf_model,
+        model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
+        ts_enum_to_model_enum, Context, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
+    };
     use cool_asserts::assert_panics;
     use deno_ast::{
         parse_module,
@@ -1699,12 +1741,7 @@ mod tests {
         },
         MediaType, ParseParams, ParsedSource, SourceTextInfo,
     };
-
-    use crate::{
-        extract_import_specifiers, get_intf_model,
-        model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
-        ts_enum_to_model_enum, Context, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
-    };
+    use indoc::indoc;
 
     const ts_intf_union: &'static str = "
         interface AKind {
@@ -1973,7 +2010,7 @@ mod tests {
 
         // TODO: these tests are wrong
         // test for collection.nullable , optional, ctor.nullable etc.
-        let (array, arrayGeneric, record, optAOfStrOrNull, optAOfMemberOrNull) = (
+        let (array, arrayGeneric, record, opt_a_of_str_or_null, opt_a_of_member_or_null) = (
             vars.get("array").unwrap(),
             vars.get("arrayGeneric").unwrap(),
             vars.get("record").unwrap(),
@@ -1981,11 +2018,11 @@ mod tests {
             vars.get("optionalNullableArrayOfMemberOrNull").unwrap(),
         );
         assert_eq!(
-            optAOfStrOrNull.ctor.suffix.as_ref().unwrap(),
+            opt_a_of_str_or_null.ctor.suffix.as_ref().unwrap(),
             " != null else \"\""
         );
         assert_eq!(
-            optAOfMemberOrNull.ctor.suffix.as_ref().unwrap(),
+            opt_a_of_member_or_null.ctor.suffix.as_ref().unwrap(),
             " != null else null"
         );
     }
@@ -2103,7 +2140,7 @@ mod tests {
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
         assert_eq!(var.ctor.builtin, true);
-        assert_eq!(var.decl_type.as_ref().unwrap(), "String");
+        assert_eq!(var.decl_type.as_ref().unwrap(), "Array");
         assert_eq!(var.ctor.start, "");
         assert_eq!(var.ctor.end, "");
         assert_eq!(&var.collection.as_ref().unwrap().is_array, &true);
@@ -2621,5 +2658,124 @@ mod tests {
             },
             includes("Conversion of class types such as Cls is forbidden"),
         )
+    }
+
+    #[test]
+    fn dict_of_arrays() {
+        let src = "
+            export interface A {
+                values?: Record<number, B[]>;
+            }
+
+            export interface B {
+                value: string;
+            }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let model = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.class_name, "A");
+        assert_eq!(model.var_descriptors.len(), 1);
+        let descriptor = model.var_descriptors.get(0).unwrap();
+        assert_eq!(descriptor.decl_type.as_ref().unwrap(), "Dictionary");
+        assert_eq!(descriptor.collection.is_some(), true);
+        let collection = descriptor.collection.as_ref().unwrap();
+        assert_eq!(collection.is_dict, true);
+        assert_eq!(collection.item_collection.is_some(), true);
+        let collection2 = collection.item_collection.as_ref().unwrap();
+        assert_eq!(collection2.is_array, true)
+    }
+
+    #[test]
+    fn dict_of_array_generic() {
+        let src = "
+            export interface A {
+                values?: Record<number, Array<B>>;
+            }
+
+            export interface B {
+                value: string;
+            }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let model = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.class_name, "A");
+        assert_eq!(model.var_descriptors.len(), 1);
+
+        let descriptor = model.var_descriptors.get(0).unwrap();
+        assert_eq!(descriptor.decl_type.as_ref().unwrap(), "Dictionary");
+        assert_eq!(descriptor.collection.is_some(), true);
+        let collection = descriptor.collection.as_ref().unwrap();
+        assert_eq!(collection.is_dict, true);
+        assert_eq!(collection.item_collection.is_some(), true);
+        let collection2 = collection.item_collection.as_ref().unwrap();
+        assert_eq!(collection2.is_array, true)
+    }
+
+    #[test]
+    fn array_of_dict() {
+        let src = "
+            export interface A {
+                values?: Record<number, B>[];
+            }
+
+            export interface B {
+                value: string;
+            }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let model = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.class_name, "A");
+        assert_eq!(model.var_descriptors.len(), 1);
+
+        let descriptor = model.var_descriptors.get(0).unwrap();
+        assert_eq!(descriptor.decl_type.as_ref().unwrap(), "Array");
+        assert_eq!(descriptor.collection.is_some(), true);
+        let collection = descriptor.collection.as_ref().unwrap();
+        assert_eq!(collection.is_array, true);
+        assert_eq!(collection.item_collection.is_some(), true);
+        let collection2 = collection.item_collection.as_ref().unwrap();
+        assert_eq!(collection2.is_dict, true)
+    }
+
+    #[test]
+    fn array_generic_of_dict() {
+        let src = "
+            export interface A {
+                values?: Array<Record<number, B>>;
+            }
+
+            export interface B {
+                value: string;
+            }
+        ";
+        let mut test_context = parse_from_string("literal-prop.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let model = get_intf_model(&mut global, &mut context, &intf, None, None);
+        assert_eq!(model.class_name, "A");
+        assert_eq!(model.var_descriptors.len(), 1);
+
+        let descriptor = model.var_descriptors.get(0).unwrap();
+        assert_eq!(descriptor.decl_type.as_ref().unwrap(), "Array");
+        assert_eq!(descriptor.collection.is_some(), true);
+        let collection = descriptor.collection.as_ref().unwrap();
+        assert_eq!(collection.is_array, true);
+        assert_eq!(collection.item_collection.is_some(), true);
+        let collection2 = collection.item_collection.as_ref().unwrap();
+        assert_eq!(collection2.is_dict, true)
     }
 }
