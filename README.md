@@ -141,12 +141,14 @@ var intf_union: AnyKind
 # Literally true
 var true_lit: bool
 var imported: ImportedInterface
-# TestInterface
+# TestInterface, Record<string, TestInterface>
 var record_object: Dictionary
+# ImportedInterface[]
 var array: Array
 
 func _init(src: Dictionary = {}) -> void:
-	update(src)
+	if src:
+		update(src)
 
 func __set_optional_date(value: Iso8601Date):
 	__assigned_properties.optional_date = true if typeof(value) != TYPE_NIL else null
@@ -159,8 +161,7 @@ func __set_nullable_optional_date(value: Iso8601Date):
 
 func update(src: Dictionary) -> void:
 	# custom import logic can be added by overriding this function
-
-	__initialized = __initialized || len(src) > 0
+	__initialized = true
 	__assigned_properties.id = true
 	id = src.id
 	__assigned_properties.str_key = true
@@ -263,6 +264,10 @@ func is_initialized() -> bool:
 # Keys where is_set(key) returns true
 func keys() -> Array:
     return __assigned_properties.keys() if __initialized else []
+
+# Duplicate this instance into a new instance
+func duplicate():
+    return get_script().new(for_json())
 ```
 
 ## Limitations

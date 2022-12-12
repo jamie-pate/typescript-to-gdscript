@@ -40,7 +40,11 @@ func is_initialized() -> bool:
 
 # Keys where is_set(key) returns true
 func keys() -> Array:
-    return __assigned_properties.keys() if __initialized else []";
+    return __assigned_properties.keys() if __initialized else []
+
+# Duplicate this instance into a new instance
+func duplicate():
+    return get_script().new(for_json())";
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ModelImportContext {

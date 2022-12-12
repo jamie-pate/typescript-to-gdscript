@@ -31,7 +31,8 @@ var {var_decl.name}{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif -}}
 	{{- if var_decl.optional }} setget __set_{var_decl.name}{{ endif }}
 {{ endfor }}
 func _init(src: { src_type.name } {{ if src_type.init }}= {src_type.init}{{ endif }}) -> void:
-	update(src)
+	if src:
+		update(src)
 {{ for var_decl in var_descriptors }}{{ if var_decl.optional }}
 func __set_{var_decl.name}(value{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}):
 	__assigned_properties.{var_decl.name} = true if typeof(value) != TYPE_NIL else null
@@ -40,8 +41,7 @@ func __set_{var_decl.name}(value{{ if var_decl.decl_type }}: {var_decl.decl_type
 
 func update(src: { src_type.name }) -> void:
 	# custom import logic can be added by overriding this function
-
-	__initialized = __initialized || len(src) > 0
+	__initialized = true
 {{ for var in vars -}}
 { var.init }
 {{ endfor }}
