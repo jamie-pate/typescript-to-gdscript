@@ -246,7 +246,7 @@ func is_initialized() -> bool:
 
 ## Limitations
 
-* Generic type parameters aren't supported well. We'd have to get into extensible sub-classes to model them properly. Use `@typescript-to-gdscript-gd-impl` to opt out here...
+* Generic type parameters can't be used as property types as we would be unable to determine the gdiscript class name for this type.
 * TypeScript Enums with assignment expressions don't work (yet)
 * Any Date typed values will require implementation of an `Iso8601Date` class which is not provided.
 * Validation is extremely limited
@@ -263,6 +263,7 @@ func is_initialized() -> bool:
 - Install rustup
   `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` or `rustup`
 - Install `rust-analyzer` and `CodeLLDB` extensions in vscode.
+- Install [Deno](https://deno.land/manual@v1.28.3/getting_started/installation#download-and-install) for TypeScript formatting and linting.
 - Restart VsCode
 
 ## Building and coding with Rust

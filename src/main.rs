@@ -323,6 +323,8 @@ struct ModuleContext {
     relative_filepath: PathBuf,
     canonical_filepath: PathBuf,
     parsed_source: Rc<ParsedSource>,
+    interface_stack: Vec<TsInterfaceDecl>,
+    type_args: Vec<Vec<Box<TsType>>>,
     import_specifiers: HashMap<Id, PathBuf>,
 }
 
@@ -341,6 +343,8 @@ impl ModuleContext {
             parsed_source,
             resolving_local: HashSet::new(),
             import_specifiers: HashMap::new(),
+            type_args: Vec::new(),
+            interface_stack: Vec::new(),
         }
     }
 
@@ -584,7 +588,11 @@ fn get_extends_intf_model(
 ) -> Vec<ModelVarDescriptor> {
     if let Expr::Ident(ident) = expr.expr.as_ref() {
         let id = ident.to_id();
-        global.stack.push(format!("Searching for {}", &id.0));
+        global.stack.push(format!(
+            "Searching for {} extended by {}",
+            &id.0,
+            &extending.to_id().0
+        ));
         let (mut resolved, mut import_context) = if let Some((t, import_context)) =
             resolve_interface_specifier_type(global, context, &id)
         {
@@ -631,6 +639,9 @@ fn get_extends_intf_model(
         };
         let mut intf_context = import_context.as_mut().unwrap_or(context);
         intf_context.pos.push(resolved.pos);
+        if let Some(args) = expr.type_args.as_ref() {
+            intf_context.type_args.push(args.params.clone());
+        }
         let r = get_intf_model(
             global,
             intf_context,
@@ -647,8 +658,11 @@ fn get_extends_intf_model(
                         .collect::<HashSet<_>>(),
                 )
             }),
-            Some(extending),
+            Some(&extending),
         );
+        if expr.type_args.is_some() {
+            intf_context.type_args.pop();
+        }
         intf_context.pos.pop();
         global.stack.pop();
 
@@ -687,7 +701,7 @@ fn get_intf_model(
         context.relative_filepath
     ));
     context.pos.push(intf.span);
-    context.pos.pop();
+    context.interface_stack.push(intf.clone());
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
     let intf_var_descriptors = intf
         .body
@@ -741,7 +755,9 @@ fn get_intf_model(
         }
     });
 
+    context.pos.pop();
     global.stack.pop();
+    context.interface_stack.pop();
     context.output_type_name = "".to_string();
     ModelContext {
         class_name: String::from(&*symbol),
@@ -1398,29 +1414,51 @@ fn resolve_local_specifier_type_or_builtin(
             result
         }
         "Omit" => panic!(
-            "Omit<T, ...> is forbidden in this position. What is the exported type name?\n{}",
+            "Omit<T, ...> is forbidden in this position. Unable to determine exported type name?\n{}",
             global.get_info(context)
         ),
         "Readonly" => panic!(
-            "Readonly<T> is forbidden in this position. What is the exported type name?\n{}",
+            "Readonly<T> is forbidden in this position. Unable to determine exported type name?\n{}",
             global.get_info(context)
         ),
         _ => {
-            if global.debug_print {
-                dbg!(type_ref);
+            let mut resolved_type_param: Option<TypeResolution> = None;
+            if let Some(intf) = context.interface_stack.last().cloned() {
+                if let Some(type_params) = intf.type_params.as_ref() {
+                    // TODO: do we search up the stacks?
+                    for (i, p) in type_params.params.iter().enumerate() {
+                        if &p.name.to_id() == id {
+                            let type_args = &context.type_args.last().cloned();
+                            resolved_type_param = if let Some(type_arg) = type_args.as_ref().and_then(|a| a.get(i)) {
+                                Some(resolve_type(global, context, type_arg))
+                            } else {
+                                panic!("Unable to find matching type param {}\n{}",
+                                id.0, global.get_info(context))
+                            };
+                            break;
+                        }
+                    }
+                }
             }
-            panic!(
-                "Unable to resolve type {} while exporting {:?}.\n\
-                \tIs it a built in type or generic type parameter?\n\
-                \tYou can prefix {} with a comment containing {} or {} to skip this type.
-                \n{}",
-                &id.0,
-                context.relative_filepath,
-                context.output_type_name,
-                SKIP_DIRECTIVE,
-                GD_IMPL_DIRECTIVE,
-                global.get_info(context)
-            )
+            if let Some(rtp) = resolved_type_param {
+                rtp
+            } else {
+                if global.debug_print {
+                    dbg!(type_ref);
+                }
+                panic!(
+                    "Unable to resolve type {} while exporting {:?}.\n\
+                    \tIs it a built in type or generic type parameter?\n\
+                    \tYou can prefix {} with a comment containing {} or {} to skip this type.
+                    \n{}",
+                    &id.0,
+                    context.relative_filepath,
+                    context.output_type_name,
+                    SKIP_DIRECTIVE,
+                    GD_IMPL_DIRECTIVE,
+                    global.get_info(context)
+                )
+            }
         }
     });
     global.stack.pop();
@@ -2777,5 +2815,81 @@ mod tests {
         assert_eq!(collection.item_collection.is_some(), true);
         let collection2 = collection.item_collection.as_ref().unwrap();
         assert_eq!(collection2.is_dict, true)
+    }
+
+    #[test]
+    fn extends_generic() {
+        let src = "
+            interface A {
+                a: true;
+            }
+            interface B<T> {
+                b: T;
+            }
+            export interface C extends B<A> {
+                c: true;
+            };
+        ";
+        let mut test_context = parse_from_string("extends-generic.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+
+        assert_eq!(model.var_descriptors.len(), 2);
+        assert_eq!(
+            model
+                .var_descriptors
+                .get(0)
+                .unwrap()
+                .decl_type
+                .as_ref()
+                .unwrap(),
+            "A"
+        );
+    }
+
+    #[test]
+    fn extends_imported_generic() {
+        let base_a = "
+            export interface A {
+                a: true;
+            }
+        ";
+        let base_b = "
+            import { A } from \"./a.js\";
+            export interface B<T> {
+                b: T;
+            }
+        ";
+        let src = "
+            import { A } from \"./a.js\";
+            import { B } from \"./b.js\";
+            export interface C extends B<A> {
+                c: true;
+            };
+        ";
+        let a_test_context = parse_from_string("a.ts", base_a);
+        let b_test_context = parse_from_string("b.ts", base_b);
+        let mut test_context = parse_from_string("extends-generic.ts", &src);
+        test_context.add_imports_from(&[&a_test_context, &b_test_context]);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+
+        assert_eq!(model.var_descriptors.len(), 2);
+        assert_eq!(
+            model
+                .var_descriptors
+                .get(0)
+                .unwrap()
+                .decl_type
+                .as_ref()
+                .unwrap(),
+            "A"
+        );
     }
 }
