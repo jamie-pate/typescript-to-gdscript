@@ -686,6 +686,12 @@ fn get_intf_model(
     let (symbol, _tag) = intf.id.to_id();
     let sstr = symbol.to_string();
     if extending.is_none() {
+        if intf.type_params.is_some() {
+            panic!(
+                "Conversion of generic interface types is forbidden. Unable to determine exported type name.You may want to use {} or {}\n{}",
+                SKIP_DIRECTIVE, GD_IMPL_DIRECTIVE ,global.get_info(context)
+            )
+        }
         if !context.output_type_name.is_empty() {
             panic!("Nested top level get_intf_model")
         }
@@ -2679,6 +2685,7 @@ mod tests {
             includes("Type literals are forbidden: \"{a:string}\"")
         )
     }
+
     #[test]
     fn no_class_property_type() {
         let src = "
@@ -2891,5 +2898,24 @@ mod tests {
                 .unwrap(),
             "A"
         );
+    }
+
+    #[test]
+    fn no_gen_generic_interface() {
+        let src = "
+            interface B {}
+            export interface A<B> {}
+        ";
+        let mut test_context = parse_from_string("gen-generic-interface.ts", &src);
+        assert_panics!(
+            {
+                let (mut global, mut context, parsed_source) = module_context(&test_context);
+                let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+                context.pos.push(export.span);
+                get_intf_model(&mut global, &mut context, &intf, None, None)
+            },
+            includes("Conversion of generic interface types is forbidden. Unable to determine exported type name."),
+        )
     }
 }
