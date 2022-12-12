@@ -111,6 +111,8 @@ extends Reference
 
 const AnyKind = preload("../AnyKind.gd")
 const Iso8601Date = preload("../Iso8601Date.gd")
+const AKind = preload("./AKind.gd")
+const BKind = preload("./BKind.gd")
 const ImportedInterface = preload("./ImportedInterface.gd")
 
 # Tracks the null/optional status of builtin properties that are not nullable in gdscript
@@ -122,9 +124,10 @@ var id: float
 var str_key: String
 var float_key: float
 var bool_key: bool
-var optional_date: Iso8601Date
-# Iso8601Date | null
-var nullable_optional_date: Iso8601Date
+# optional
+var optional_date: Iso8601Date setget __set_optional_date
+# optional Iso8601Date | null
+var nullable_optional_date: Iso8601Date setget __set_nullable_optional_date
 var date: Iso8601Date
 # Literally "abcd"
 var str_lit: String
@@ -138,11 +141,21 @@ var intf_union: AnyKind
 # Literally true
 var true_lit: bool
 var imported: ImportedInterface
-var record_object: TestInterface
+# TestInterface
+var record_object: Dictionary
 var array: Array
 
 func _init(src: Dictionary = {}) -> void:
 	update(src)
+
+func __set_optional_date(value: Iso8601Date):
+	__assigned_properties.optional_date = true if typeof(value) != TYPE_NIL else null
+	optional_date = value
+
+func __set_nullable_optional_date(value: Iso8601Date):
+	__assigned_properties.nullable_optional_date = true if typeof(value) != TYPE_NIL else null
+	nullable_optional_date = value
+
 
 func update(src: Dictionary) -> void:
 	# custom import logic can be added by overriding this function
@@ -156,12 +169,12 @@ func update(src: Dictionary) -> void:
 	float_key = src.floatKey
 	__assigned_properties.bool_key = true
 	bool_key = src.boolKey
-	if src.optionalDate in src:
+	if "optionalDate" in src:
 		__assigned_properties.optional_date = true
 		optional_date = Iso8601Date.new(src.optionalDate)
-	if src.nullableOptionalDate in src:
-		__assigned_properties.nullable_optional_date = true if src.nullableOptionalDate != null else null
-		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate) if src.nullableOptionalDate != null else null
+	if "nullableOptionalDate" in src:
+		__assigned_properties.nullable_optional_date = true if typeof(src.nullableOptionalDate) != TYPE_NIL else null
+		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate) if typeof(src.nullableOptionalDate) != TYPE_NIL else null
 	__assigned_properties.date = true
 	date = Iso8601Date.new(src.date)
 	__assigned_properties.str_lit = true
@@ -202,7 +215,7 @@ func for_json() -> Dictionary:
 	if is_set("optional_date"):
 		result.optionalDate = optional_date.for_json()
 	if is_set("nullable_optional_date"):
-		result.nullableOptionalDate = nullable_optional_date.for_json() if nullable_optional_date != null else null
+		result.nullableOptionalDate = nullable_optional_date.for_json() if typeof(nullable_optional_date) != TYPE_NIL else null
 	result.date = date.for_json()
 	result.strLit = str_lit
 	result.intLit = int_lit
@@ -221,6 +234,10 @@ func for_json() -> Dictionary:
 		result.array.append(__value__)
 
 	return result
+
+# Unset a property (as if it was never assigned)
+func unset(property_name) -> void:
+    __assigned_properties.erase(property_name)
 
 # Checks to see whether an optional property has been assigned or not.
 # Works for non-optional properties too though if update() has been called
@@ -242,6 +259,10 @@ func set_null(property_name: String) -> void:
 # True if update() has been called
 func is_initialized() -> bool:
     return __initialized
+
+# Keys where is_set(key) returns true
+func keys() -> Array:
+    return __assigned_properties.keys() if __initialized else []
 ```
 
 ## Limitations

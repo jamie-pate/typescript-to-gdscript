@@ -356,7 +356,7 @@ impl ModelVarDescriptor {
         let mut init_parts: Vec<String> = vec![ctor_start.into(), ctor_end.into()];
         let mut indent_level = 0;
         if self.optional {
-            parts.push(format!("if {src_specifier} in {src}:"));
+            parts.push(format!("if \"{src_name}\" in {src}:"));
             indent_level += 1;
         }
         if let Some(collection) = &self.collection {
@@ -825,7 +825,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true
                 {ws}prop_name = Intf.new(src.propName)\
             "})
@@ -839,7 +839,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = Intf.new(src.propName) if typeof(src.propName) != TYPE_NIL else null\
             "})
@@ -855,7 +855,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true
                 {ws}prop_name = src.propName\
             "})
@@ -870,7 +870,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = src.propName if typeof(src.propName) != TYPE_NIL else \"\"\
             "})
@@ -1026,7 +1026,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = []
                 {ws}if typeof(src.propName) != TYPE_NIL:
@@ -1050,7 +1050,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = {{}}
                 {ws}if typeof(src.propName) != TYPE_NIL:
@@ -1076,7 +1076,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = []
                 {ws}if typeof(src.propName) != TYPE_NIL:
@@ -1100,7 +1100,7 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if src.propName in src:
+                if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
                 {ws}prop_name = {{}}
                 {ws}if typeof(src.propName) != TYPE_NIL:
