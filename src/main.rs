@@ -860,6 +860,15 @@ impl TypeResolution {
             self.imports.append(&mut t.imports);
         }
     }
+
+    fn append_comment(&mut self, comment: &str) {
+        let safe_comment = comment.replace("\n", "↵");
+        self.comment = if let Some(c) = self.comment.as_ref() {
+            Some(format!("{}, {}", c, safe_comment))
+        } else {
+            Some(safe_comment)
+        };
+    }
 }
 
 impl From<Ident> for TypeResolution {
@@ -1046,6 +1055,8 @@ fn resolve_type(
                 .push(format!("resolve array_type {:?}", array_type));
             let mut result = resolve_type(global, context, &array_type.elem_type);
             let ctor_type = result.type_name.clone();
+
+            result.append_comment(context.get_span_text(&array_type.span));
             let collection = result
                 .collection
                 .as_ref()
@@ -1389,6 +1400,7 @@ fn resolve_local_specifier_type_or_builtin(
                     Some(c)
                 }
             }
+            result.append_comment(context.get_span_text(&type_ref.span));
             result.collection = Some(ModelVarCollection {
                 is_array: false,
                 is_dict: true,
@@ -1411,6 +1423,7 @@ fn resolve_local_specifier_type_or_builtin(
                 .and_then(|c| Some(Box::new(c.clone())));
             let mut result =
                 ctor_type.unwrap_or_else(|| TypeResolution::new("Array", &type_ref.span));
+            result.append_comment(context.get_span_text(&type_ref.span));
             result.collection = Some(ModelVarCollection {
                 is_array: true,
                 is_dict: false,
@@ -1652,7 +1665,8 @@ fn resolve_type_decl(
             }
         }
         Decl::TsEnum(ts_enum) => {
-            if match_id.0 == ts_enum.id.to_id().0 {
+            let id_str = ts_enum.id.to_id().0;
+            if match_id.0 == id_str {
                 let enum_model = ts_enum_to_model_enum(global, context, ts_enum);
                 let mut resolved = TypeResolution::new(
                     if enum_model.have_string_members {
@@ -1662,6 +1676,7 @@ fn resolve_type_decl(
                     },
                     &ts_enum.span,
                 );
+                resolved.append_comment(&id_str);
                 resolved.enums.push(enum_model);
                 result = Some(resolved);
             }
@@ -2917,5 +2932,45 @@ mod tests {
             },
             includes("Conversion of generic interface types is forbidden. Unable to determine exported type name."),
         )
+    }
+
+    #[test]
+    fn decl_comments() {
+        let src = "
+
+            export enum EnumEnum {One=1,Two=2}
+            export enum EnumDict {One=\"one\",Two=\"two\"}
+            export interface A {
+                enum_enum: EnumEnum;
+                enum_dict: EnumDict;
+                record: Record<string, EnumEnum>;
+                array1: Array<EnumDict>;
+                array2: EnumEnum[];
+            };
+        ";
+        let mut test_context = parse_from_string("decl-comments.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &intf, None, None);
+
+        assert_eq!(model.var_descriptors.len(), 5);
+        let enum_enum = model.var_descriptors.get(0).unwrap();
+        let enum_dict = model.var_descriptors.get(1).unwrap();
+        let record = model.var_descriptors.get(2).unwrap();
+        let array1 = model.var_descriptors.get(3).unwrap();
+        let array2 = model.var_descriptors.get(4).unwrap();
+        assert_eq!(enum_enum.comment.as_ref().unwrap(), "EnumEnum");
+        assert_eq!(enum_dict.comment.as_ref().unwrap(), "EnumDict");
+        assert_eq!(
+            record.comment.as_ref().unwrap(),
+            "EnumEnum int, Record<string, EnumEnum>"
+        );
+        assert_eq!(
+            array1.comment.as_ref().unwrap(),
+            "EnumDict, Array<EnumDict>"
+        );
+        assert_eq!(array2.comment.as_ref().unwrap(), "EnumEnum, EnumEnum[]")
     }
 }
