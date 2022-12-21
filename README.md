@@ -282,6 +282,10 @@ func duplicate():
 	* Unions containing JavaScript primitive types become untyped in gdscript. Currently there is no type checking on these
 	* Unions containing other types are not allowed (except X | null)
 * Type literal expressions are not allowed for properties or as the type of collection based properties. Since they are anonymous we can't generate a class for them
+* Extending the generated classes is not effective because generated classes won't import the extended class
+	* For now use composition instead of inheritance for adding behaviors
+	* TODO: `@typescript-to-gdscript-gd-abstract` which is similar to `@typescript-to-gdscript-gd-impl` directive. Instead of skipping this directive will mark the generated gdscript class as **abstract** and expects the user to implement a class with the same name in ../ which extends the generated class and adds behaviors etc.
+
 # Getting Started
 
 ## Set up Rust

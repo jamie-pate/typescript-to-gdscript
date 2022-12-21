@@ -124,7 +124,7 @@ impl ModelValueCtor {
         } else {
             "".to_string()
         };
-        let (lparen_str, rparen_str) = if new_str != "" { ("(", ")") } else { ("", "") };
+        let (lparen_str, rparen_str) = if new_str != "" { ("(", ", __partial_deep)") } else { ("", "") };
         ModelValueCtor {
             name: name.to_string(),
             builtin,
@@ -229,6 +229,8 @@ pub struct ModelVarDescriptor {
     pub optional: bool,
     // Gdscript primitives are non_nullable...
     pub non_nullable: bool,
+    // extends PartialDeep
+    pub partial_deep: bool,
     // Imported references required by this var
     pub imports: Vec<ModelImportContext>,
     // Enums for this property
@@ -358,10 +360,11 @@ impl ModelVarDescriptor {
             "true".to_string()
         };
         let mut init_parts: Vec<String> = vec![ctor_start.into(), ctor_end.into()];
-        let mut indent_level = 0;
+        let mut indent_level = 1;
         if self.optional {
             parts.push(format!("if \"{src_name}\" in {src}:"));
-            indent_level += 1;
+        } else {
+            parts.push(format!("if !__partial_deep || \"{src_name}\" in {src}:"));
         }
         if let Some(collection) = &self.collection {
             let c_init = collection.init();
@@ -559,11 +562,12 @@ impl ModelVarDescriptor {
             self.for_json.suffix.is_some()
         };
 
-        let mut indent_level = 0;
+        let mut indent_level = 1;
 
         if self.optional {
             parts.push(format!("if is_set(\"{name}\"):"));
-            indent_level += 1;
+        } else {
+            parts.push(format!("if !__partial_deep || is_set(\"{name}\"):"));
         }
         let nullable = ModelValueForJson::new("__nullable__", self.for_json.suffix.is_some());
         let maybe_suffix = if self.collection.is_some() {
@@ -675,6 +679,7 @@ pub struct ModelContext {
     pub imports: Vec<ModelImportContext>,
     pub enums: Vec<ModelEnum>,
     pub vars: Vec<ModelVar>,
+    pub partial_deep: bool,
     pub var_descriptors: Vec<ModelVarDescriptor>,
     pub state_vars: String,
     pub state_methods: String,
@@ -710,6 +715,7 @@ pub mod tests {
                 for_json: ModelValueForJson::new(type_name, type_nullable),
                 collection: None,
                 optional: optional,
+                partial_deep: false,
                 non_nullable: is_builtin(type_name),
                 imports: Vec::new(),
                 enums: Vec::new(),
@@ -763,13 +769,11 @@ pub mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                __assigned_properties.prop_name = true\n\
-                prop_name = Intf.new(src.propName)\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true\n\
+                {ws}prop_name = Intf.new(src.propName, __partial_deep)\
+            "})
         );
     }
 
@@ -779,13 +783,11 @@ pub mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
-                prop_name = Intf.new(src.propName) if typeof(src.propName) != TYPE_NIL else null\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
+                {ws}prop_name = Intf.new(src.propName, __partial_deep) if typeof(src.propName) != TYPE_NIL else null\
+            "})
         );
     }
     // if the target is non nullable then don't add any null checking
@@ -795,13 +797,11 @@ pub mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                __assigned_properties.prop_name = true\n\
-                prop_name = src.propName\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true\n\
+                {ws}prop_name = src.propName\
+            "})
         );
     }
 
@@ -812,13 +812,11 @@ pub mod tests {
         let rendered = model.render_init(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
-                prop_name = src.propName if typeof(src.propName) != TYPE_NIL else \"\"\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null\n\
+                {ws}prop_name = src.propName if typeof(src.propName) != TYPE_NIL else \"\"\
+            "})
         );
     }
 
@@ -831,7 +829,7 @@ pub mod tests {
             indent(formatdoc! {"
                 if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true
-                {ws}prop_name = Intf.new(src.propName)\
+                {ws}prop_name = Intf.new(src.propName, __partial_deep)\
             "})
         );
     }
@@ -845,7 +843,7 @@ pub mod tests {
             indent(formatdoc! {"
                 if \"propName\" in src:
                 {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                {ws}prop_name = Intf.new(src.propName) if typeof(src.propName) != TYPE_NIL else null\
+                {ws}prop_name = Intf.new(src.propName, __partial_deep) if typeof(src.propName) != TYPE_NIL else null\
             "})
         );
     }
@@ -894,11 +892,12 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true
-                prop_name = []
-                for __item__ in src.propName:
-                {ws}var __value__ = Intf.new(__item__)
-                {ws}prop_name.append(__value__)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true
+                {ws}prop_name = []
+                {ws}for __item__ in src.propName:
+                {ws}{ws}var __value__ = Intf.new(__item__, __partial_deep)
+                {ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -916,11 +915,12 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true
-                prop_name = {{}}
-                for __key__ in src.propName:
-                {ws}var __value__ = src.propName[__key__]
-                {ws}prop_name[__key__] = Intf.new(__value__)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true
+                {ws}prop_name = {{}}
+                {ws}for __key__ in src.propName:
+                {ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}prop_name[__key__] = Intf.new(__value__, __partial_deep)\
             "})
         );
     }
@@ -938,12 +938,13 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = []
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __item__ in src.propName:
-                {ws}{ws}var __value__ = Intf.new(__item__)
-                {ws}{ws}prop_name.append(__value__)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = []
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __item__ in src.propName:
+                {ws}{ws}{ws}var __value__ = Intf.new(__item__, __partial_deep)
+                {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -961,12 +962,13 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = {{}}
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __key__ in src.propName:
-                {ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}prop_name[__key__] = Intf.new(__value__)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = {{}}
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__, __partial_deep)\
             "})
         );
     }
@@ -984,12 +986,13 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = []
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __item__ in src.propName:
-                {ws}{ws}var __value__ = Intf.new(__item__) if typeof(__item__) != TYPE_NIL else null
-                {ws}{ws}prop_name.append(__value__)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = []
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __item__ in src.propName:
+                {ws}{ws}{ws}var __value__ = Intf.new(__item__, __partial_deep) if typeof(__item__) != TYPE_NIL else null
+                {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
     }
@@ -1007,12 +1010,13 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = {{}}
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __key__ in src.propName:
-                {ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}prop_name[__key__] = Intf.new(__value__) if typeof(__value__) != TYPE_NIL else null\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = {{}}
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__, __partial_deep) if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1035,7 +1039,7 @@ pub mod tests {
                 {ws}prop_name = []
                 {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __item__ in src.propName:
-                {ws}{ws}{ws}var __value__ = Intf.new(__item__) if typeof(__item__) != TYPE_NIL else null
+                {ws}{ws}{ws}var __value__ = Intf.new(__item__, __partial_deep) if typeof(__item__) != TYPE_NIL else null
                 {ws}{ws}{ws}prop_name.append(__value__)\
             "})
         );
@@ -1060,7 +1064,7 @@ pub mod tests {
                 {ws}if typeof(src.propName) != TYPE_NIL:
                 {ws}{ws}for __key__ in src.propName:
                 {ws}{ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__) if typeof(__value__) != TYPE_NIL else null\
+                {ws}{ws}{ws}prop_name[__key__] = Intf.new(__value__, __partial_deep) if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1121,12 +1125,10 @@ pub mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                result.propName = prop_name.for_json()\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = prop_name.for_json()\
+            "})
         );
     }
 
@@ -1136,12 +1138,10 @@ pub mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                result.propName = prop_name.for_json() if typeof(prop_name) != TYPE_NIL else null\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = prop_name.for_json() if typeof(prop_name) != TYPE_NIL else null\
+            "})
         );
     }
     // if the target is non nullable then don't add any null checking
@@ -1151,12 +1151,10 @@ pub mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                result.propName = prop_name\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = prop_name\
+            "})
         );
     }
 
@@ -1167,12 +1165,10 @@ pub mod tests {
         let rendered = model.render_for_json(DEFAULT_INDENT);
         assert_eq!(
             rendered,
-            indent(
-                "\
-                result.propName = prop_name if !is_null(\"prop_name\") else null\
-            "
-                .to_string()
-            )
+            indent(formatdoc! {"
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = prop_name if !is_null(\"prop_name\") else null\
+            "})
         );
     }
 
@@ -1244,10 +1240,11 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                result.propName = []
-                for __item__ in prop_name:
-                {ws}var __value__ = __item__.for_json()
-                {ws}result.propName.append(__value__)\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = []
+                {ws}for __item__ in prop_name:
+                {ws}{ws}var __value__ = __item__.for_json()
+                {ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1265,10 +1262,11 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                result.propName = {{}}
-                for __key__ in prop_name:
-                {ws}var __value__ = prop_name[__key__]
-                {ws}result.propName[__key__] = __value__.for_json()\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = {{}}
+                {ws}for __key__ in prop_name:
+                {ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}result.propName[__key__] = __value__.for_json()\
             "})
         );
     }
@@ -1286,13 +1284,14 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null(\"prop_name\"):
-                {ws}result.propName = null
-                else:
-                {ws}result.propName = []
-                {ws}for __item__ in prop_name:
-                {ws}{ws}var __value__ = __item__.for_json()
-                {ws}{ws}result.propName.append(__value__)\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = []
+                {ws}{ws}for __item__ in prop_name:
+                {ws}{ws}{ws}var __value__ = __item__.for_json()
+                {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1310,13 +1309,14 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null(\"prop_name\"):
-                {ws}result.propName = null
-                else:
-                {ws}result.propName = {{}}
-                {ws}for __key__ in prop_name:
-                {ws}{ws}var __value__ = prop_name[__key__]
-                {ws}{ws}result.propName[__key__] = __value__.for_json()\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = {{}}
+                {ws}{ws}for __key__ in prop_name:
+                {ws}{ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}{ws}result.propName[__key__] = __value__.for_json()\
             "})
         );
     }
@@ -1334,13 +1334,14 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null(\"prop_name\"):
-                {ws}result.propName = null
-                else:
-                {ws}result.propName = []
-                {ws}for __item__ in prop_name:
-                {ws}{ws}var __value__ = __item__.for_json() if typeof(__item__) != TYPE_NIL else null
-                {ws}{ws}result.propName.append(__value__)\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = []
+                {ws}{ws}for __item__ in prop_name:
+                {ws}{ws}{ws}var __value__ = __item__.for_json() if typeof(__item__) != TYPE_NIL else null
+                {ws}{ws}{ws}result.propName.append(__value__)\
             "})
         );
     }
@@ -1358,13 +1359,14 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                if is_null(\"prop_name\"):
-                {ws}result.propName = null
-                else:
-                {ws}result.propName = {{}}
-                {ws}for __key__ in prop_name:
-                {ws}{ws}var __value__ = prop_name[__key__]
-                {ws}{ws}result.propName[__key__] = __value__.for_json() if typeof(__value__) != TYPE_NIL else null\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}if is_null(\"prop_name\"):
+                {ws}{ws}result.propName = null
+                {ws}else:
+                {ws}{ws}result.propName = {{}}
+                {ws}{ws}for __key__ in prop_name:
+                {ws}{ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}{ws}result.propName[__key__] = __value__.for_json() if typeof(__value__) != TYPE_NIL else null\
             "})
         );
     }
@@ -1490,16 +1492,17 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = {{}}
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __key__ in src.propName:
-                {ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}var __coll__ = []
-                {ws}{ws}prop_name[__key__] = __coll__
-                {ws}{ws}for __item__1 in __value__:
-                {ws}{ws}{ws}var __value__1 = B.new(__item__1) if typeof(__item__1) != TYPE_NIL else null
-                {ws}{ws}{ws}__coll__.append(__value__1)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = {{}}
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}var __coll__ = []
+                {ws}{ws}{ws}prop_name[__key__] = __coll__
+                {ws}{ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}{ws}var __value__1 = B.new(__item__1, __partial_deep) if typeof(__item__1) != TYPE_NIL else null
+                {ws}{ws}{ws}{ws}__coll__.append(__value__1)\
                 "}
                 .to_string()
             )
@@ -1525,15 +1528,16 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = []
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __item__ in src.propName:
-                {ws}{ws}var __coll__ = {{}}
-                {ws}{ws}prop_name.append(__coll__)
-                {ws}{ws}for __key__1 in __item__:
-                {ws}{ws}{ws}var __value__1 = __item__[__key__1]
-                {ws}{ws}{ws}__coll__[__key__1] = B.new(__value__1) if typeof(__value__1) != TYPE_NIL else null\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = []
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __item__ in src.propName:
+                {ws}{ws}{ws}var __coll__ = {{}}
+                {ws}{ws}{ws}prop_name.append(__coll__)
+                {ws}{ws}{ws}for __key__1 in __item__:
+                {ws}{ws}{ws}{ws}var __value__1 = __item__[__key__1]
+                {ws}{ws}{ws}{ws}__coll__[__key__1] = B.new(__value__1, __partial_deep) if typeof(__value__1) != TYPE_NIL else null\
                 "}
                 .to_string()
             )
@@ -1559,16 +1563,17 @@ pub mod tests {
             rendered,
             indent(
                 formatdoc! {"
-                __assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
-                prop_name = {{}}
-                if typeof(src.propName) != TYPE_NIL:
-                {ws}for __key__ in src.propName:
-                {ws}{ws}var __value__ = src.propName[__key__]
-                {ws}{ws}var __coll__ = []
-                {ws}{ws}prop_name[__key__] = __coll__
-                {ws}{ws}for __item__1 in __value__:
-                {ws}{ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
-                {ws}{ws}{ws}__coll__.append(__value__1)\
+                if !__partial_deep || \"propName\" in src:
+                {ws}__assigned_properties.prop_name = true if typeof(src.propName) != TYPE_NIL else null
+                {ws}prop_name = {{}}
+                {ws}if typeof(src.propName) != TYPE_NIL:
+                {ws}{ws}for __key__ in src.propName:
+                {ws}{ws}{ws}var __value__ = src.propName[__key__]
+                {ws}{ws}{ws}var __coll__ = []
+                {ws}{ws}{ws}prop_name[__key__] = __coll__
+                {ws}{ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
+                {ws}{ws}{ws}{ws}__coll__.append(__value__1)\
                 "}
                 .to_string()
             )
@@ -1593,14 +1598,15 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                result.propName = {{}}
-                for __key__ in prop_name:
-                {ws}var __value__ = prop_name[__key__]
-                {ws}var __coll__ = []
-                {ws}result.propName[__key__] = __coll__
-                {ws}for __item__1 in __value__:
-                {ws}{ws}var __value__1 = __item__1.for_json() if typeof(__item__1) != TYPE_NIL else null
-                {ws}{ws}__coll__.append(__value__1)\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = {{}}
+                {ws}for __key__ in prop_name:
+                {ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}var __coll__ = []
+                {ws}{ws}result.propName[__key__] = __coll__
+                {ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}var __value__1 = __item__1.for_json() if typeof(__item__1) != TYPE_NIL else null
+                {ws}{ws}{ws}__coll__.append(__value__1)\
             "})
         );
     }
@@ -1623,13 +1629,14 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                result.propName = []
-                for __item__ in prop_name:
-                {ws}var __coll__ = {{}}
-                {ws}result.propName.append(__coll__)
-                {ws}for __key__1 in __item__:
-                {ws}{ws}var __value__1 = __item__[__key__1]
-                {ws}{ws}__coll__[__key__1] = __value__1.for_json() if typeof(__value__1) != TYPE_NIL else null\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = []
+                {ws}for __item__ in prop_name:
+                {ws}{ws}var __coll__ = {{}}
+                {ws}{ws}result.propName.append(__coll__)
+                {ws}{ws}for __key__1 in __item__:
+                {ws}{ws}{ws}var __value__1 = __item__[__key__1]
+                {ws}{ws}{ws}__coll__[__key__1] = __value__1.for_json() if typeof(__value__1) != TYPE_NIL else null\
             "})
         );
     }
@@ -1652,15 +1659,17 @@ pub mod tests {
         assert_eq!(
             rendered,
             indent(formatdoc! {"
-                result.propName = {{}}
-                for __key__ in prop_name:
-                {ws}var __value__ = prop_name[__key__]
-                {ws}var __coll__ = []
-                {ws}result.propName[__key__] = __coll__
-                {ws}for __item__1 in __value__:
-                {ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
-                {ws}{ws}__coll__.append(__value__1)\
+                if !__partial_deep || is_set(\"prop_name\"):
+                {ws}result.propName = {{}}
+                {ws}for __key__ in prop_name:
+                {ws}{ws}var __value__ = prop_name[__key__]
+                {ws}{ws}var __coll__ = []
+                {ws}{ws}result.propName[__key__] = __coll__
+                {ws}{ws}for __item__1 in __value__:
+                {ws}{ws}{ws}var __value__1 = __item__1 if typeof(__item__1) != TYPE_NIL else null
+                {ws}{ws}{ws}__coll__.append(__value__1)\
             "})
         );
     }
+
 }
