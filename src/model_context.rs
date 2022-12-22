@@ -124,7 +124,11 @@ impl ModelValueCtor {
         } else {
             "".to_string()
         };
-        let (lparen_str, rparen_str) = if new_str != "" { ("(", ", __partial_deep)") } else { ("", "") };
+        let (lparen_str, rparen_str) = if new_str != "" {
+            ("(", ", __partial_deep)")
+        } else {
+            ("", "")
+        };
         ModelValueCtor {
             name: name.to_string(),
             builtin,
@@ -1671,5 +1675,4 @@ pub mod tests {
             "})
         );
     }
-
 }

@@ -419,7 +419,13 @@ fn convert(
                             intf.id.to_id(),
                             context.get_text(TERM_WIDTH)
                         ));
-                        models.push(get_intf_model(global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None));
+                        models.push(get_intf_model(
+                            global,
+                            &mut context,
+                            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+                            None,
+                            None,
+                        ));
                         global.stack.pop();
                     }
                     context.pos.pop();
@@ -434,7 +440,13 @@ fn convert(
                         intf.id.to_id(),
                         context.get_text(TERM_WIDTH)
                     ));
-                    models.push(get_intf_model(global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None));
+                    models.push(get_intf_model(
+                        global,
+                        &mut context,
+                        &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+                        None,
+                        None,
+                    ));
                     global.stack.pop();
                 }
                 context.pos.pop();
@@ -746,7 +758,8 @@ fn get_intf_model(
     context.pos.push(decl_span);
     context.decl_stack.push(decl.clone());
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
-    let (intf_var_descriptors, extended_types) = if let ResolutionDecl::TsInterfaceDecl(intf) = decl {
+    let (intf_var_descriptors, extended_types) = if let ResolutionDecl::TsInterfaceDecl(intf) = decl
+    {
         (
             intf.body
                 .body
@@ -762,11 +775,10 @@ fn get_intf_model(
                     }
                 })
                 .collect::<Vec<_>>(),
-            intf
-            .extends
-            .iter()
-            .map(|e| get_extends_intf_model(global, context, e, &intf.id))
-            .collect::<Vec<_>>()
+            intf.extends
+                .iter()
+                .map(|e| get_extends_intf_model(global, context, e, &intf.id))
+                .collect::<Vec<_>>(),
         )
     } else {
         (Vec::new(), Vec::new())
@@ -1691,7 +1703,9 @@ fn resolve_type_decl(
                 let mut result = if have_directive(global, context, GD_IMPL_DIRECTIVE) {
                     TypeResolution::gd_impl(&alias.span)
                 } else {
-                    context.decl_stack.push(ResolutionDecl::TsTypeAliasDecl(alias.to_owned()));
+                    context
+                        .decl_stack
+                        .push(ResolutionDecl::TsTypeAliasDecl(alias.to_owned()));
                     let r = resolve_type(global, context, &alias.type_ann);
                     context.decl_stack.pop();
                     r
@@ -1881,8 +1895,8 @@ fn detect_indent(template_str: &str, debug_print: bool) -> String {
 mod tests {
     use std::{borrow::Borrow, collections::HashMap, path::PathBuf, rc::Rc};
 
-    use crate::ResolutionDecl;
     use crate::model_context::tests::indent;
+    use crate::ResolutionDecl;
     use crate::{
         extract_import_specifiers, get_intf_model,
         model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
@@ -1948,7 +1962,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None)
+        get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        )
     }
 
     fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
@@ -2030,7 +2050,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()) , None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         let imports: Vec<ModelImportContext> = model
             .imports
             .into_iter()
@@ -2058,7 +2084,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         let import = model
             .imports
             .iter()
@@ -2080,7 +2112,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
     }
 
     #[test]
@@ -2124,7 +2162,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -2177,7 +2221,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
         for var in model.var_descriptors.iter() {
             assert_eq!(
@@ -2315,7 +2365,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -2334,7 +2390,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.imports.len(), 0);
         assert_eq!(model.var_descriptors.len(), 1);
         let var = model.var_descriptors.get(0).unwrap();
@@ -2356,7 +2418,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 2);
     }
 
@@ -2380,7 +2448,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 2);
     }
 
@@ -2405,7 +2479,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 3);
     }
 
@@ -2437,7 +2517,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
         global.debug_print = true;
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 3);
     }
 
@@ -2469,7 +2555,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
         global.debug_print = true;
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 3);
         assert_eq!(model.imports.len(), 0);
     }
@@ -2504,7 +2596,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
         global.debug_print = true;
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 3);
         assert_eq!(model.imports.len(), 1);
     }
@@ -2537,7 +2635,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
         global.debug_print = true;
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 3);
     }
 
@@ -2591,7 +2695,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 2);
     }
@@ -2615,7 +2725,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
@@ -2677,7 +2793,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 3);
     }
@@ -2701,7 +2823,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.var_descriptors.get(0).unwrap().name, "value");
@@ -2731,7 +2859,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
     }
@@ -2747,7 +2881,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
         assert_eq!(model.enums.get(0).unwrap().have_string_members, false);
@@ -2777,7 +2917,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.var_descriptors.len(), 1);
         assert_eq!(model.enums.len(), 1);
         assert_eq!(model.enums.get(0).unwrap().have_string_members, true);
@@ -2805,7 +2951,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
     }
 
     #[test]
@@ -2820,7 +2972,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
     }
 
     #[test]
@@ -2835,7 +2993,13 @@ mod tests {
                 let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
                 context.pos.push(export.span);
-                get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None)
+                get_intf_model(
+                    &mut global,
+                    &mut context,
+                    &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+                    None,
+                    None,
+                )
             },
             includes("Type literals are forbidden: \"{a:string}\"")
         )
@@ -2854,7 +3018,13 @@ mod tests {
                 let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
                 context.pos.push(export.span);
-                get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None)
+                get_intf_model(
+                    &mut global,
+                    &mut context,
+                    &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+                    None,
+                    None,
+                )
             },
             includes("Conversion of class types such as Cls is forbidden"),
         )
@@ -2876,7 +3046,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let model = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let model = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.class_name, "A");
         assert_eq!(model.var_descriptors.len(), 1);
         let descriptor = model.var_descriptors.get(0).unwrap();
@@ -2905,7 +3081,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let model = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let model = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.class_name, "A");
         assert_eq!(model.var_descriptors.len(), 1);
 
@@ -2935,7 +3117,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let model = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let model = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.class_name, "A");
         assert_eq!(model.var_descriptors.len(), 1);
 
@@ -2965,7 +3153,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let model = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let model = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
         assert_eq!(model.class_name, "A");
         assert_eq!(model.var_descriptors.len(), 1);
 
@@ -2997,7 +3191,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 2);
         assert_eq!(
@@ -3040,7 +3240,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 2);
         assert_eq!(
@@ -3093,7 +3299,13 @@ mod tests {
         let (intf, export) = get_mc_intf_export(&mut context, &parsed_source);
 
         context.pos.push(export.span);
-        let mut model: ModelContext = get_intf_model(&mut global, &mut context, &ResolutionDecl::TsInterfaceDecl(intf.to_owned()), None, None);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            None,
+            None,
+        );
 
         assert_eq!(model.var_descriptors.len(), 5);
         let enum_enum = model.var_descriptors.get(0).unwrap();
@@ -3206,5 +3418,4 @@ mod tests {
         assert_eq!(var_desc.optional, false);
         assert_eq!(model.partial_deep, false);
     }
-
 }
