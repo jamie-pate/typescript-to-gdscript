@@ -68,6 +68,12 @@ Check to see if a nullable property was null.
 Set a property to null.
 * If the `typeof()` the property is `TYPE_OBJECT` or `TYPE_NIL` then that property will also be set to `null`.
 
+#### `func is_partial_deep() -> bool`:
+
+Returns `true` if the current instance has been flagged as `partial_deep` meaning
+* All properties are optional
+* All child property instances should also be created with the `partial_deep` flag
+
 #### `func is_initialized() -> bool`:
 
 Returns true when `update()` has been called with a non-empty `Dictionary`
@@ -111,14 +117,15 @@ extends Reference
 
 const AnyKind = preload("../AnyKind.gd")
 const Iso8601Date = preload("../Iso8601Date.gd")
-const AKind = preload("./AKind.gd")
-const BKind = preload("./BKind.gd")
 const ImportedInterface = preload("./ImportedInterface.gd")
+const ImportedPartialTypeRef = preload("./ImportedPartialTypeRef.gd")
+const PartialTypeRef = preload("./PartialTypeRef.gd")
 
 # Tracks the null/optional status of builtin properties that are not nullable in gdscript
 var __assigned_properties = {}
 # Check is_initialized() to detect if this object contains data.
 var __initialized = false
+var __partial_deep := false
 
 var id: float
 var str_key: String
@@ -140,13 +147,16 @@ var str_union: String
 var intf_union: AnyKind
 # Literally true
 var true_lit: bool
+var partial_type_ref: PartialTypeRef
 var imported: ImportedInterface
+var imported_partial_type_ref: ImportedPartialTypeRef
 # TestInterface, Record<string, TestInterface>
 var record_object: Dictionary
 # ImportedInterface[]
 var array: Array
 
-func _init(src: Dictionary = {}) -> void:
+func _init(src: Dictionary = {}, partial_deep = false) -> void:
+	__partial_deep = __partial_deep || partial_deep
 	if src:
 		update(src)
 
@@ -162,46 +172,66 @@ func __set_nullable_optional_date(value: Iso8601Date):
 func update(src: Dictionary) -> void:
 	# custom import logic can be added by overriding this function
 	__initialized = true
-	__assigned_properties.id = true
-	id = src.id
-	__assigned_properties.str_key = true
-	str_key = src.strKey
-	__assigned_properties.float_key = true
-	float_key = src.floatKey
-	__assigned_properties.bool_key = true
-	bool_key = src.boolKey
+	if !__partial_deep || "id" in src:
+		__assigned_properties.id = true
+		id = src.id
+	if !__partial_deep || "strKey" in src:
+		__assigned_properties.str_key = true
+		str_key = src.strKey
+	if !__partial_deep || "floatKey" in src:
+		__assigned_properties.float_key = true
+		float_key = src.floatKey
+	if !__partial_deep || "boolKey" in src:
+		__assigned_properties.bool_key = true
+		bool_key = src.boolKey
 	if "optionalDate" in src:
 		__assigned_properties.optional_date = true
-		optional_date = Iso8601Date.new(src.optionalDate)
+		optional_date = Iso8601Date.new(src.optionalDate, __partial_deep)
 	if "nullableOptionalDate" in src:
 		__assigned_properties.nullable_optional_date = true if typeof(src.nullableOptionalDate) != TYPE_NIL else null
-		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate) if typeof(src.nullableOptionalDate) != TYPE_NIL else null
-	__assigned_properties.date = true
-	date = Iso8601Date.new(src.date)
-	__assigned_properties.str_lit = true
-	str_lit = src.strLit
-	__assigned_properties.int_lit = true
-	int_lit = src.intLit
-	__assigned_properties.float_lit = true
-	float_lit = src.floatLit
-	__assigned_properties.str_union = true
-	str_union = src.strUnion
-	__assigned_properties.intf_union = true
-	intf_union = AnyKind.new(src.intfUnion)
-	__assigned_properties.true_lit = true
-	true_lit = src.trueLit
-	__assigned_properties.imported = true
-	imported = ImportedInterface.new(src.imported)
-	__assigned_properties.record_object = true
-	record_object = {}
-	for __key__ in src.recordObject:
-		var __value__ = src.recordObject[__key__]
-		record_object[__key__] = TestInterface.new(__value__)
-	__assigned_properties.array = true
-	array = []
-	for __item__ in src.array:
-		var __value__ = ImportedInterface.new(__item__)
-		array.append(__value__)
+		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate, __partial_deep) if typeof(src.nullableOptionalDate) != TYPE_NIL else null
+	if !__partial_deep || "date" in src:
+		__assigned_properties.date = true
+		date = Iso8601Date.new(src.date, __partial_deep)
+	if !__partial_deep || "strLit" in src:
+		__assigned_properties.str_lit = true
+		str_lit = src.strLit
+	if !__partial_deep || "intLit" in src:
+		__assigned_properties.int_lit = true
+		int_lit = src.intLit
+	if !__partial_deep || "floatLit" in src:
+		__assigned_properties.float_lit = true
+		float_lit = src.floatLit
+	if !__partial_deep || "strUnion" in src:
+		__assigned_properties.str_union = true
+		str_union = src.strUnion
+	if !__partial_deep || "intfUnion" in src:
+		__assigned_properties.intf_union = true
+		intf_union = AnyKind.new(src.intfUnion, __partial_deep)
+	if !__partial_deep || "trueLit" in src:
+		__assigned_properties.true_lit = true
+		true_lit = src.trueLit
+	if !__partial_deep || "partialTypeRef" in src:
+		__assigned_properties.partial_type_ref = true
+		partial_type_ref = PartialTypeRef.new(src.partialTypeRef, __partial_deep)
+	if !__partial_deep || "imported" in src:
+		__assigned_properties.imported = true
+		imported = ImportedInterface.new(src.imported, __partial_deep)
+	if !__partial_deep || "importedPartialTypeRef" in src:
+		__assigned_properties.imported_partial_type_ref = true
+		imported_partial_type_ref = ImportedPartialTypeRef.new(src.importedPartialTypeRef, __partial_deep)
+	if !__partial_deep || "recordObject" in src:
+		__assigned_properties.record_object = true
+		record_object = {}
+		for __key__ in src.recordObject:
+			var __value__ = src.recordObject[__key__]
+			record_object[__key__] = TestInterface.new(__value__, __partial_deep)
+	if !__partial_deep || "array" in src:
+		__assigned_properties.array = true
+		array = []
+		for __item__ in src.array:
+			var __value__ = ImportedInterface.new(__item__, __partial_deep)
+			array.append(__value__)
 
 
 func for_json() -> Dictionary:
@@ -209,30 +239,48 @@ func for_json() -> Dictionary:
 	var result = {}
 	if !__initialized:
 		return result
-	result.id = id
-	result.strKey = str_key
-	result.floatKey = float_key
-	result.boolKey = bool_key
+	if !__partial_deep || is_set("id"):
+		result.id = id
+	if !__partial_deep || is_set("str_key"):
+		result.strKey = str_key
+	if !__partial_deep || is_set("float_key"):
+		result.floatKey = float_key
+	if !__partial_deep || is_set("bool_key"):
+		result.boolKey = bool_key
 	if is_set("optional_date"):
 		result.optionalDate = optional_date.for_json()
 	if is_set("nullable_optional_date"):
 		result.nullableOptionalDate = nullable_optional_date.for_json() if typeof(nullable_optional_date) != TYPE_NIL else null
-	result.date = date.for_json()
-	result.strLit = str_lit
-	result.intLit = int_lit
-	result.floatLit = float_lit
-	result.strUnion = str_union
-	result.intfUnion = intf_union.for_json()
-	result.trueLit = true_lit
-	result.imported = imported.for_json()
-	result.recordObject = {}
-	for __key__ in record_object:
-		var __value__ = record_object[__key__]
-		result.recordObject[__key__] = __value__.for_json()
-	result.array = []
-	for __item__ in array:
-		var __value__ = __item__.for_json()
-		result.array.append(__value__)
+	if !__partial_deep || is_set("date"):
+		result.date = date.for_json()
+	if !__partial_deep || is_set("str_lit"):
+		result.strLit = str_lit
+	if !__partial_deep || is_set("int_lit"):
+		result.intLit = int_lit
+	if !__partial_deep || is_set("float_lit"):
+		result.floatLit = float_lit
+	if !__partial_deep || is_set("str_union"):
+		result.strUnion = str_union
+	if !__partial_deep || is_set("intf_union"):
+		result.intfUnion = intf_union.for_json()
+	if !__partial_deep || is_set("true_lit"):
+		result.trueLit = true_lit
+	if !__partial_deep || is_set("partial_type_ref"):
+		result.partialTypeRef = partial_type_ref.for_json()
+	if !__partial_deep || is_set("imported"):
+		result.imported = imported.for_json()
+	if !__partial_deep || is_set("imported_partial_type_ref"):
+		result.importedPartialTypeRef = imported_partial_type_ref.for_json()
+	if !__partial_deep || is_set("record_object"):
+		result.recordObject = {}
+		for __key__ in record_object:
+			var __value__ = record_object[__key__]
+			result.recordObject[__key__] = __value__.for_json()
+	if !__partial_deep || is_set("array"):
+		result.array = []
+		for __item__ in array:
+			var __value__ = __item__.for_json()
+			result.array.append(__value__)
 
 	return result
 
@@ -257,6 +305,10 @@ func set_null(property_name: String) -> void:
     if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
         self[property_name] = null
 
+# True if this object has been flagged as a partial_deep instance
+func is_partial_deep() -> bool:
+    return __partial_deep
+
 # True if update() has been called
 func is_initialized() -> bool:
     return __initialized
@@ -272,15 +324,14 @@ func duplicate():
 
 ## Limitations
 
-* Generic type parameters can't be used as property types as we would be unable to determine the gdiscript class name for this type.
-* TypeScript Enums with assignment expressions don't work (yet)
+* Generic type parameters can't be used as property types as we would be unable to determine the gdscript class name for this type.
 * Any Date typed values will require implementation of an `Iso8601Date` class which is not provided.
 * Validation is extremely limited
     * The values of literal types or literal type unions have comments but are not enforced.
 * Enums with string expressions for values are coverted to dictionaries since gdscript doesn't support that.
 * Union types:
 	* Unions containing JavaScript primitive types become untyped in gdscript. Currently there is no type checking on these
-	* Unions containing other types are not allowed (except X | null)
+	* Unions containing other types are not allowed (except `T | null`)
 * Type literal expressions are not allowed for properties or as the type of collection based properties. Since they are anonymous we can't generate a class for them
 * Extending the generated classes is not effective because generated classes won't import the extended class
 	* For now use composition instead of inheritance for adding behaviors

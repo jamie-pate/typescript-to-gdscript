@@ -6,6 +6,8 @@ export interface ImportedInterface {
   value: string;
 }
 
+export type ImportedPartialTypeRef = Partial<ImportedInterface>;
+
 export type ImportedRecord1 = Record<string, string>;
 
 export type ImportedArray1 = string[];

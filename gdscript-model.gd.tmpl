@@ -20,7 +20,7 @@ enum {enum.name} \{
 }
 {{endif}}{{ endfor }}
 {state_vars}
-__partial_deep = {{ if partial_deep }}true{{ else }}false{{ endif }}
+var __partial_deep := {{ if partial_deep }}true{{ else }}false{{ endif }}
 
 {{ for var_decl in var_descriptors -}}
 {{ if var_decl.comment -}}

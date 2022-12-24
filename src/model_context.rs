@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, string};
 
-use deno_ast::swc::ast::TsEnumDecl;
+use deno_ast::swc::ast::Id;
 use indoc::formatdoc;
 use serde::Serialize;
 
@@ -34,6 +34,10 @@ func set_null(property_name: String) -> void:
     if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
         self[property_name] = null
 
+# True if this object has been flagged as a partial_deep instance
+func is_partial_deep() -> bool:
+    return __partial_deep
+
 # True if update() has been called
 func is_initialized() -> bool:
     return __initialized
@@ -51,6 +55,8 @@ pub struct ModelImportContext {
     pub name: String,
     pub src: String,
     pub gd_impl: bool,
+    // Typescript symbol/context id of this var descriptor
+    pub id: Id,
 }
 
 // Extra template data that's required if the variable is an array or dictionary
@@ -233,8 +239,6 @@ pub struct ModelVarDescriptor {
     pub optional: bool,
     // Gdscript primitives are non_nullable...
     pub non_nullable: bool,
-    // extends PartialDeep
-    pub partial_deep: bool,
     // Imported references required by this var
     pub imports: Vec<ModelImportContext>,
     // Enums for this property
@@ -692,6 +696,7 @@ pub struct ModelContext {
 #[cfg(test)]
 pub mod tests {
     use convert_case::{Case, Casing};
+    use deno_ast::swc::ast::Id;
     use indoc::{formatdoc, indoc};
 
     use crate::model_context::{ModelVarCollection, DEFAULT_INDENT};
@@ -719,7 +724,6 @@ pub mod tests {
                 for_json: ModelValueForJson::new(type_name, type_nullable),
                 collection: None,
                 optional: optional,
-                partial_deep: false,
                 non_nullable: is_builtin(type_name),
                 imports: Vec::new(),
                 enums: Vec::new(),

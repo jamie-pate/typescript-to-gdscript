@@ -9,6 +9,7 @@ import {
   ImportedArray1,
   ImportedArray2,
   ImportedInterface,
+  ImportedPartialTypeRef,
   ImportedRecord1,
   ImportedRecord2,
 } from './imported-interface.js';
@@ -40,6 +41,11 @@ export interface ExportedTestInterface {
   boolKey: boolean;
 }
 
+interface TypeRefIntf {
+  a: string;
+}
+type PartialTypeRef = Partial<TypeRefIntf>;
+
 interface TestInterface {
   id: TeamId;
   strKey: string;
@@ -55,7 +61,9 @@ interface TestInterface {
   intfUnion: AnyKind;
   trueLit: true;
   //bigIntLit: BigInt(9007199254740991);
+  partialTypeRef: PartialTypeRef;
   imported: ImportedInterface;
+  importedPartialTypeRef: ImportedPartialTypeRef;
   recordObject: Record<string, TestInterface>;
   array: ImportedInterface[];
 }
