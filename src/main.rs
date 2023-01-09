@@ -42,6 +42,7 @@ use std::{
     ffi::OsStr,
     fmt::Display,
     fs::{create_dir_all, read_to_string, write},
+    ops::DerefMut,
     path::{self, Path, PathBuf},
     process::exit,
     rc::Rc,
@@ -326,6 +327,7 @@ impl Context {
     }
 }
 
+#[derive(Debug, Clone)]
 struct ModuleContext {
     type_directive_consumed: bool,
     pos: Vec<Span>,
@@ -786,10 +788,18 @@ fn get_intf_model(
     mut omit: HashSet<String>,
     extending: Option<&Ident>,
 ) -> ModelContext {
-    let (id, type_params, decl_span, aliased_type, intf) = match decl {
+    let mut owned_intf_context: ModuleContext;
+    let (id, type_params, decl_span, aliased_type, intf, context) = match decl {
         ResolutionDecl::TsInterfaceDecl(intf) => {
             let id = intf.id.to_id();
-            (id, &intf.type_params, intf.span, None, intf.to_owned())
+            (
+                id,
+                &intf.type_params,
+                intf.span,
+                None,
+                intf.to_owned(),
+                context,
+            )
         }
         ResolutionDecl::TsTypeAliasDecl(t) => {
             let id = t.id.to_id();
@@ -809,16 +819,21 @@ fn get_intf_model(
             global.resolve_to_intf = false;
             global.stack.pop();
             context.pos.pop();
-            let intf = if let Some(ResolutionDecl::TsInterfaceDecl(intf)) = &aliased_type.decl {
-                intf.to_owned()
-            } else {
-                panic!(
-                    "Unable to find interface that {} is derived from.\n{}",
-                    id.0,
-                    global.get_info(context)
-                );
-            };
-            (id, &t.type_params, t.span, Some(aliased_type), intf)
+            // if we are following a typeref then we need to swap to that intf's context
+            let (intf, ctxt) =
+                if let (Some(ResolutionDecl::TsInterfaceDecl(intf)), Some(mut intf_context)) =
+                    (&aliased_type.decl, aliased_type.decl_context.to_owned())
+                {
+                    owned_intf_context = intf_context;
+                    (intf.to_owned(), &mut owned_intf_context)
+                } else {
+                    panic!(
+                        "Unable to find interface that {} is derived from.\n{}",
+                        id.0,
+                        global.get_info(context)
+                    );
+                };
+            (id, &t.type_params, t.span, Some(aliased_type), intf, ctxt)
         }
     };
     let sstr = id.0.to_string();
@@ -958,6 +973,7 @@ struct TypeResolution {
     literal: Option<String>,
     gd_impl: bool,
     decl: Option<ResolutionDecl>,
+    decl_context: Option<ModuleContext>,
     enums: Vec<ModelEnum>,
     omit: Vec<String>,
     partial: bool,
@@ -1009,6 +1025,7 @@ impl TypeResolution {
             literal: None,
             gd_impl: false,
             decl: None,
+            decl_context: None,
             omit: Vec::new(),
             partial: false,
             partial_deep: false,
@@ -1055,6 +1072,7 @@ impl From<Ident> for TypeResolution {
             comment: None,
             gd_impl: false,
             decl: None,
+            decl_context: None,
             omit: Vec::new(),
             partial: false,
             partial_deep: false,
@@ -1572,6 +1590,7 @@ fn resolve_local_specifier_type_or_builtin(
                     let mut r = TypeResolution::new(context, &*decl.id.to_id().0, &type_ref.span);
                     r.ctor_type = Some(r.type_name.clone());
                     r.decl = Some(ResolutionDecl::TsTypeAliasDecl(decl.to_owned()));
+                    r.decl_context = Some(context.clone());
                     decl_type_ref_resolved = Some(r);
                     type_ann = Some(decl.type_ann.to_owned());
                 }
@@ -1881,6 +1900,7 @@ fn resolve_type_decl(
                 };
                 context.id_stack.pop();
                 result.decl = Some(ResolutionDecl::TsTypeAliasDecl((alias.to_owned())));
+                result.decl_context = Some(context.clone());
                 result.add_import(context);
                 global.stack.pop();
                 context.pos.pop();
@@ -1898,6 +1918,7 @@ fn resolve_type_decl(
                 let id = intf.id.to_id();
                 let mut result: TypeResolution = intf.id.clone().into();
                 result.decl = Some(ResolutionDecl::TsInterfaceDecl(intf.to_owned()));
+                result.decl_context = Some(context.clone());
                 result.ctor_type = Some(result.type_name.clone());
                 context.pos.pop();
                 Some(result)
@@ -3696,6 +3717,48 @@ mod tests {
         assert_eq!(model.imports.len(), 1);
         let import = model.imports.get(0).unwrap();
         assert_eq!(import.name, "B");
+    }
+
+    #[test]
+    fn imported2_partial_deep_typeref_prop() {
+        let src_d = "
+            interface E {};
+            export type D = E;
+        ";
+        let src_b = "
+            import { D } from \"./src-d.js\";
+            interface C {
+                C: string;
+                d: D;
+            }
+            export interface B extends C {
+                d: D;
+            };
+        ";
+        let src = "
+            import { PartialDeep } from \"type-fest\";
+            import { B } from \"./src-b.js\";
+            export type A = PartialDeep<B>;
+        ";
+        let mut model = parse_and_get_model_with_imports(
+            "partial-deep-intf-prop-a.ts",
+            &src,
+            &[
+                &parse_from_string("src-b.ts", &src_b),
+                &parse_from_string("src-d.ts", &src_d),
+            ],
+        );
+        assert_eq!(model.var_descriptors.len(), 2);
+        let var_desc = model.var_descriptors.get(0).unwrap();
+        assert_eq!(var_desc.optional, false);
+        assert_eq!(var_desc.name, "c");
+        let var_desc = model.var_descriptors.get(1).unwrap();
+        assert_eq!(var_desc.optional, false);
+        assert_eq!(var_desc.name, "d");
+        assert_eq!(model.partial_deep, true);
+        assert_eq!(model.imports.len(), 1);
+        let import = model.imports.get(0).unwrap();
+        assert_eq!(import.name, "E");
     }
 
     #[test]
