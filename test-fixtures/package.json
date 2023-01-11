@@ -1,0 +1,17 @@
+{
+  "name": "test-fixtures",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "common-tags": "^1.8.2"
+  },
+  "devDependencies": {
+    "@types/common-tags": "^1.8.1"
+  }
+}

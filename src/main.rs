@@ -17,13 +17,14 @@ use deno_ast::{
         atoms::Atom,
         common::{
             comments::Comments, serializer::Type, util::iter::IteratorExt, BytePos, Span,
-            SyntaxContext,
+            SyntaxContext
         },
     },
     MediaType, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
     SourceRangedForSpanned, SourceTextInfo,
 };
-
+use swc_common::FileName;
+use swc_ecma_loader::{TargetEnv, resolve::Resolve, resolvers::node::NodeModulesResolver};
 use lazy_static::__Deref;
 use model_context::{
     is_builtin, ModelContext, ModelEnum, ModelImportContext, ModelSrcType, ModelValueCtor,
@@ -186,6 +187,7 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
     if !result.starts_with(".") && !result.has_root() {
         // this is a node_js module and I don't want to go
         // searching for types from that rat's nest
+        // During the recursive parsing step we will have already resolved this
         return result;
     }
     if let Some(ext) = result.extension() {
@@ -199,6 +201,10 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
         result = directory.join(result.strip_prefix("./").unwrap_or(&result));
     }
     return result.with_extension("ts");
+}
+
+fn resolve_in_node_modules(directory: &Path, filePath: PathBuf) {
+
 }
 
 fn parse_recursive(
@@ -236,6 +242,8 @@ fn parse_recursive(
                     continue;
                 }
                 parse_recursive(import_stack, imported_modules, &m_filename, debug_print);
+            } else {
+                node_resolve_and_parse(import_stack, imported_modules, canonical_filepath, &m_filename, debug_print);
             }
         }
     }
@@ -244,6 +252,25 @@ fn parse_recursive(
         eprintln!("parsed imports from {:?}", canonical_filepath);
     }
     import_stack.pop();
+}
+
+fn node_resolve_and_parse(import_stack: &mut Vec<PathBuf>, imported_modules: &mut HashMap<PathBuf, Rc<ParsedSource>>, base: &Path, canonical_filepath: &Path, debug_print: bool) {
+    let node_resolver = NodeModulesResolver::new(TargetEnv::Browser, Default::default(), true);
+    let resolved_file_path = node_resolver
+        .resolve(&FileName::Real(base.to_owned()), &canonical_filepath.to_string_lossy())
+        .expect(&format!("Unable to resolve node module {:?} from {:?}", canonical_filepath, base));
+    match resolved_file_path {
+        FileName::Real(path) =>
+            parse_recursive(import_stack, imported_modules, &path, debug_print),
+        FileName::Macros(_) => todo!(),
+        FileName::QuoteExpansion => todo!(),
+        FileName::Anon => todo!(),
+        FileName::MacroExpansion => todo!(),
+        FileName::ProcMacroSourceCode => todo!(),
+        FileName::Url(_) => todo!(),
+        FileName::Internal(_) => todo!(),
+        FileName::Custom(_) => todo!(),
+    }
 }
 
 struct ModuleRegexes {
@@ -3853,5 +3880,26 @@ mod tests {
         ";
         let models = parse_and_get_models("gd-impl-directive.ts", &src);
         assert_eq!(models.len(), 0);
+    }
+
+
+    #[test]
+    fn imports_from_node_modules() {
+        let src_npm = "
+            export type PkgInf = {
+                a: boolean;
+            }
+        ";
+        let src = "
+            import { PkgIntf } from \"pkg\";
+            export interface a {
+                b: PkgIntf
+            }
+        ";
+        let mut model = parse_and_get_model_with_imports(
+            "imports_from_node_modules.ts",
+            &src,
+            &[&parse_from_string("node_modules/pkg/index.d.ts", &src_npm)],
+        );
     }
 }
