@@ -277,11 +277,20 @@ impl TraceStack {
     }
 
     fn pop(&mut self) -> Option<String> {
+        assert!(!self.stack.is_empty());
         let result = self.stack.pop();
         if self.stack.is_empty() {
             self.trace.clear();
         }
         result
+    }
+
+    fn first(&self) -> &str {
+        if let Some(first) = self.stack.get(0) {
+            first
+        } else {
+            "NO STACK!"
+        }
     }
 }
 
@@ -322,7 +331,7 @@ impl Context {
         if self.debug_print {
             format!("{}\nstack:\n\t{}", mc.get_info_(), self.stack)
         } else {
-            mc.get_info_()
+            format!("{}\n{}", mc.get_info_(), self.stack.first())
         }
     }
 }
@@ -1436,10 +1445,6 @@ fn get_intf_model_var(
         } else {
             None
         };
-
-        if global.debug_print {
-            dbg!(&src_name);
-        }
         let type_ann = prop_sig.type_ann.as_ref().expect(&format!(
             "IDK what to do with this type {:#?}\n{}",
             prop_sig,
@@ -1596,6 +1601,16 @@ fn resolve_local_specifier_type_or_builtin(
                 }
             }
         }
+    }
+    if decl_resolved.is_some() {
+        global
+            .stack
+            .push(format!("resolved local specifier for {}", sstr));
+    } else {
+        global.stack.push(format!(
+            "resolve_local_specifier_type_or_builtin (fallback to builtin) for {}",
+            sstr
+        ));
     }
     // if we were already resolving a type that hasn't been imported
     // or we just can't find the type then maybe it's a TypeScript builtin?
