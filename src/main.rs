@@ -1577,6 +1577,13 @@ fn resolve_first_type_param(
     resolve_type(global, context, type_param)
 }
 
+fn resolve_iso_date_type(context: &ModuleContext, span: &Span) -> TypeResolution {
+    let mut result = TypeResolution::gd_impl(context, span);
+    result.type_name = ISO_DATE_TYPE_NAME.to_string();
+    result.ctor_type = Some(result.type_name.clone());
+    result
+}
+
 fn resolve_local_specifier_type_or_builtin(
     global: &mut Context,
     context: &mut ModuleContext,
@@ -1619,10 +1626,7 @@ fn resolve_local_specifier_type_or_builtin(
         "Date" => {
             // gd_impl type Iso8601Date.gd must be provided
             // TODO: create reference implementation gdscript code?
-            let mut result = TypeResolution::gd_impl(context, &type_ref.span);
-            result.type_name = ISO_DATE_TYPE_NAME.to_string();
-            result.ctor_type = Some(result.type_name.clone());
-            result
+            resolve_iso_date_type(context, &type_ref.span)
         }
         "Record" => {
             let ctor_type: Option<TypeResolution> = if let Some(prop_type) =
@@ -2062,8 +2066,15 @@ fn update_resolve_from_comments(
                 // maybe we want to change this to a number later and allow multiple directives
                 if !context.type_directive_consumed {
                     context.type_directive_consumed = true;
-                    result = result.clone();
-                    result.type_name = gd_type.as_str().into();
+                    result = match gd_type.as_str() {
+                        ISO_DATE_TYPE_NAME => resolve_iso_date_type(context, span),
+                        _ => {
+                            result = result.clone();
+                            result.type_name = gd_type.as_str().into();
+                            result
+                        }
+                    };
+                    result.add_import(context);
                 }
             }
         }
@@ -3868,5 +3879,24 @@ mod tests {
         ";
         let models = parse_and_get_models("gd-impl-directive.ts", &src);
         assert_eq!(models.len(), 0);
+    }
+
+    #[test]
+    fn type_directive_iso_date() {
+        let src = "
+            export interface Intf {
+                // @typescript-to-gdscript-type: Iso8601Date
+                time: string;
+            }
+        ";
+        let models = parse_and_get_models("type-directive-iso-date.ts", &src);
+        assert_eq!(models.len(), 1);
+        let model = models.get(0).unwrap();
+        assert_eq!(model.imports.len(), 1);
+        let import = model.imports.get(0).unwrap();
+        assert_eq!(import.name, "Iso8601Date");
+        assert_eq!(model.vars.len(), 1);
+        let var_decl = model.vars.get(0).unwrap();
+        var_decl.init == "Iso8601Date";
     }
 }
