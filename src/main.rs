@@ -389,10 +389,8 @@ impl ModuleContext {
         format!(
             "{}:{}\n{}",
             &self.relative_filepath.to_string_lossy(),
-            &span
-                .range()
-                .start_line_fast(&self.parsed_source.text_info()),
-            self.get_span_text(span)
+            &self.parsed_source.text_info().line_index(span.start()),
+            &self.get_span_text(span)
         )
     }
 
@@ -2400,6 +2398,66 @@ mod tests {
                 parse_and_get_model("extend-generic.ts", &ts_extend_generic);
             },
             includes("PartialDeep<T> is forbidden in this position.")
+        );
+    }
+
+    #[test]
+    fn nullable_optionals() {
+        let src = format!(
+            "
+            interface Other {{a: 1}}
+            export interface Intf {{
+                obj?: Other | null;
+                str?: string | null;
+                float?: number | null;
+                /* {}: int */
+                int?: number | null;
+                bool?: boolean | null;
+            }}
+        ",
+            TYPE_DIRECTIVE
+        );
+        let mut test_context = parse_from_string("nullable-primitives.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let (intf, export) = get_mc_export_intf(&mut context, &parsed_source);
+
+        context.pos.push(export.span);
+        let mut model: ModelContext = get_intf_model(
+            &mut global,
+            &mut context,
+            &ResolutionDecl::TsInterfaceDecl(intf.to_owned()),
+            HashSet::new(),
+            None,
+        );
+        let mut vars: HashMap<String, &ModelVarDescriptor> = HashMap::new();
+        for var in model.var_descriptors.iter() {
+            assert_eq!(
+                var.ctor.suffix.is_some(),
+                true,
+                "{} has no suffix?",
+                var.ctor.name
+            );
+            vars.insert(var.src_name.to_string(), var);
+        }
+        assert_eq!(
+            vars.get("obj").unwrap().ctor.suffix.as_ref().unwrap(),
+            ") != TYPE_NIL else null"
+        );
+        assert_eq!(
+            vars.get("str").unwrap().ctor.suffix.as_ref().unwrap(),
+            ") != TYPE_NIL else \"\""
+        );
+        assert_eq!(
+            vars.get("int").unwrap().ctor.suffix.as_ref().unwrap(),
+            ") != TYPE_NIL else 0"
+        );
+        assert_eq!(
+            vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
+            ") != TYPE_NIL else 0.0"
+        );
+        assert_eq!(
+            vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),
+            ") != TYPE_NIL else false"
         );
     }
 
