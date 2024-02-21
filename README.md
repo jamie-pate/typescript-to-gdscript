@@ -346,6 +346,7 @@ func duplicate():
 - Install `rust-analyzer` and `CodeLLDB` extensions in vscode.
 - Install [Deno](https://deno.land/manual@v1.28.3/getting_started/installation#download-and-install) for TypeScript formatting and linting.
 - Restart VsCode
+- Run `cargo fetch`
 
 ## Building and coding with Rust
 

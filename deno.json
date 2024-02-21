@@ -1,10 +1,6 @@
 {
   "fmt": {
-    "files": {
-      "exclude": ["target", "README.md"]
-    },
-    "options": {
-      "singleQuote": true
-    }
+    "exclude": ["target", "README.md"],
+    "singleQuote": true
   }
 }
