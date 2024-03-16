@@ -36,9 +36,9 @@ func _init(src: { src_type.name } {{ if src_type.init }}= {src_type.init}{{ endi
 	if src:
 		update(src)
 {{ for var_decl in var_descriptors }}{{ if var_decl.optional }}
-func __set_{var_decl.name}(value{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}):
-	__assigned_properties.{var_decl.name} = true if typeof(value) != TYPE_NIL else null
-	{var_decl.name} = value
+func __set_{var_decl.name}(__value__{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}):
+	__assigned_properties.{var_decl.name} = true if typeof(__value__) != TYPE_NIL else null
+	{var_decl.name} = __value__
 {{ endif }}{{ endfor }}
 
 func update(src: { src_type.name }) -> void:
