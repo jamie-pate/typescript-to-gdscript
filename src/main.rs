@@ -1243,7 +1243,7 @@ fn resolve_type(
     context: &mut ModuleContext,
     ts_type: &TsType,
 ) -> TypeResolution {
-    match (ts_type) {
+    let result = match (ts_type) {
         TsType::TsTypeRef(type_ref) => {
             global
                 .stack
@@ -1305,7 +1305,6 @@ fn resolve_type(
                     global.get_info(context)
                 ),
             };
-            result = update_resolve_from_comments(context, result);
             global.stack.pop();
             result
         }
@@ -1371,7 +1370,8 @@ fn resolve_type(
             ts_type,
             global.get_info(context)
         ),
-    }
+    };
+    return update_resolve_from_comments(context, result);
 }
 
 fn lit_to_ts_lit(ts_lit: &Lit) -> TsLit {
@@ -1539,7 +1539,20 @@ fn resolve_local_specifier_type(
                     }
                 }
                 ModuleItem::Stmt(Stmt::Decl(decl)) => {
-                    let resolved = resolve_type_decl(global, context, &decl, &id);
+                    let alias_or_intf_pos = match decl {
+                        Decl::TsTypeAlias(alias) => Some(alias.span.to_owned()),
+                        Decl::TsInterface(intf) => Some(intf.span.to_owned()),
+                        _ => None,
+                    };
+
+                    let resolved = if let Some(new_pos) = alias_or_intf_pos {
+                        context.pos.push(new_pos);
+                        let res = resolve_type_decl(global, context, &decl, &id);
+                        context.pos.pop();
+                        res
+                    } else {
+                        resolve_type_decl(global, context, &decl, &id)
+                    };
                     if let Some(mut r) = resolved {
                         r.add_import(context);
                         decl_resolved = Some(r);
@@ -1790,7 +1803,6 @@ fn resolve_local_specifier_type_or_builtin(
 fn print_type_of<T>(_: &T) {
     println!("{}", std::any::type_name::<T>())
 }
-// TODO: resolve specifiers across modules until we find one that has @typescript-to-gdscript-type: int or something?
 fn resolve_imported_specifier_type<'a>(
     global: &mut Context,
     context: &'a ModuleContext,
@@ -1897,7 +1909,6 @@ fn resolve_type_decl(
     match decl {
         Decl::TsTypeAlias(alias) => {
             result = if match_id.0 == alias.id.to_id().0 {
-                context.pos.push(alias.span.to_owned());
                 global.stack.push(format!(
                     "resolve_type_decl:TsTypeAlias {}",
                     alias.id.to_id().0
@@ -1909,9 +1920,7 @@ fn resolve_type_decl(
                     context
                         .decl_stack
                         .push(ResolutionDecl::TsTypeAliasDecl(alias.to_owned()));
-                    context.id_stack.push(alias.id.to_id().to_owned());
                     let r = resolve_type(global, context, &alias.type_ann);
-                    context.id_stack.pop();
                     context.decl_stack.pop();
                     r
                 };
@@ -1920,7 +1929,6 @@ fn resolve_type_decl(
                 result.decl_context = Some(context.clone());
                 result.add_import(context);
                 global.stack.pop();
-                context.pos.pop();
                 Some(result)
             } else {
                 if global.debug_print {
@@ -1931,13 +1939,11 @@ fn resolve_type_decl(
         }
         Decl::TsInterface(intf) => {
             result = if match_id.0 == intf.id.to_id().0 {
-                context.pos.push(intf.span.to_owned());
                 let id = intf.id.to_id();
                 let mut result: TypeResolution = intf.id.clone().into();
                 result.decl = Some(ResolutionDecl::TsInterfaceDecl(intf.to_owned()));
                 result.decl_context = Some(context.clone());
                 result.ctor_type = Some(result.type_name.clone());
-                context.pos.pop();
                 Some(result)
             } else {
                 None
@@ -3956,5 +3962,128 @@ mod tests {
         assert_eq!(model.vars.len(), 1);
         let var_decl = model.vars.get(0).unwrap();
         var_decl.init == "Iso8601Date";
+    }
+
+    #[test]
+    fn type_directive_imported() {
+        let team_id = "
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+        ";
+        let src = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface A { interface_value: TeamId; }
+        ";
+        let models = parse_and_get_models_with_imports(
+            "type-directive-imported.ts",
+            &src,
+            &[&parse_from_string("team-id.ts", team_id)],
+        );
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("int")));
+    }
+
+    #[test]
+    fn type_directive_local() {
+        let src = "
+        // @typescript-to-gdscript-type: int
+        export type TeamId = number;
+        export interface A { interface_value: TeamId; }
+    ";
+        let models = parse_and_get_models("type-directive-across-modules.ts", &src);
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("int")));
+    }
+    #[test]
+    fn type_directive_on_property() {
+        let src = "
+        export type TeamId = number;
+        export interface A { 
+            // @typescript-to-gdscript-type: unknown
+            interface_value: TeamId; 
+        }
+    ";
+        let models = parse_and_get_models("type-directive-on-property.ts", &src);
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("unknown")));
+    }
+    #[test]
+    #[ignore]
+    fn type_directive_override_property() {
+        let src = "
+        // @typescript-to-gdscript-type: int
+        export type TeamId = number;
+        export interface A { 
+            // @typescript-to-gdscript-type: unknown
+            interface_value: TeamId; 
+        }
+    ";
+        let models = parse_and_get_models("type-directive-override-property.ts", &src);
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("unknown")));
+    }
+
+    #[test]
+    fn type_directive_on_property_imported() {
+        let team_id = "
+            export type TeamId = number;
+        ";
+        let src = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface A {
+                // @typescript-to-gdscript-type: unknown
+                interface_value: TeamId;
+            }
+        ";
+        let models = parse_and_get_models_with_imports(
+            "type-directive-on-property-imported.ts",
+            &src,
+            &[&parse_from_string("team-id.ts", team_id)],
+        );
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("unknown")));
+    }
+
+    #[test]
+    fn type_directive_override_property_imported() {
+        let team_id = "
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+        ";
+        let src = "
+            import { TeamId } from \"./team-id.ts\";
+            export interface A {
+                // @typescript-to-gdscript-type: unknown
+                interface_value: TeamId;
+            }
+        ";
+        let models = parse_and_get_models_with_imports(
+            "type-directive-override-property-imported.ts",
+            &src,
+            &[&parse_from_string("team-id.ts", team_id)],
+        );
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("unknown")));
+    }
+
+    #[test]
+    #[ignore]
+    fn type_directive_on_builtin_property() {
+        let src = "
+            export interface A { 
+                // @typescript-to-gdscript-type: unknown
+                interface_value: Array<number>; 
+            }
+        ";
+        let models = parse_and_get_models("type-directive-on-builtin-property.ts", &src);
+        let interfaceValue = &models[0].var_descriptors[0];
+        assert_eq!(interfaceValue.name, "interface_value");
+        assert_eq!(interfaceValue.decl_type, Some(String::from("unknown")));
     }
 }
