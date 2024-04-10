@@ -1,4 +1,4 @@
-extends Reference
+extends RefCounted
 {{- if comment }}
 # {comment}
 
@@ -29,7 +29,7 @@ var __partial_deep := {{ if partial_deep }}true{{ else }}false{{ endif }}
 var {var_decl.name}{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif -}}
 	{{- if var_decl.decl_init }} = {var_decl.decl_init}
 	{{- endif -}}
-	{{- if var_decl.optional }} setget __set_{var_decl.name}{{ endif }}
+	{{- if var_decl.optional }}: set = __set_{var_decl.name}{{ endif }}
 {{ endfor }}
 func _init(src: { src_type.name } {{ if src_type.init }}= {src_type.init}{{ endif }}, partial_deep = false) -> void:
 	__partial_deep = __partial_deep || partial_deep

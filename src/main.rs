@@ -1,6 +1,5 @@
 #![allow(warnings)]
 #[macro_use]
-
 extern crate lazy_static;
 
 use convert_case::{Case, Casing};
@@ -21,9 +20,8 @@ use deno_ast::{
             SyntaxContext,
         },
     },
-    MediaType, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
+    MediaType, ModuleSpecifier, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
     SourceRangedForSpanned, SourceTextInfo,
-    ModuleSpecifier,
 };
 
 use lazy_static::__Deref;
@@ -165,11 +163,13 @@ fn read_and_parse_file(import_stack: &mut Vec<PathBuf>, filename: &Path) -> Pars
         "Unable to read file {:?}\n${:#?}",
         filename, import_stack
     ));
-    let specifier = ModuleSpecifier::parse(
-        &format!("file://{}", filename.to_str().expect(&format!("filename invalid {:?}", filename)))
-    ).expect(
-        &format!("can't parse filename {:?}", filename)
-    );
+    let specifier = ModuleSpecifier::parse(&format!(
+        "file://{}",
+        filename
+            .to_str()
+            .expect(&format!("filename invalid {:?}", filename))
+    ))
+    .expect(&format!("can't parse filename {:?}", filename));
     return parse_module(ParseParams {
         specifier: specifier,
         media_type: MediaType::TypeScript,
@@ -424,7 +424,9 @@ fn convert(
     let mut module = parsed_source.module();
     let models = extract_module_models(global, &mut context, module);
     for model in models.into_iter() {
-        let output_filepath = output_dir.join(&model.class_name).with_extension("gd");
+        let output_filepath = output_dir
+            .join(&model.class_name.to_case(Case::Snake))
+            .with_extension("gd");
         let file_path = model.canonical_src_filepath.to_path_buf();
         let output = template.render(TEMPLATE_NAME, &model).expect(&format!(
             "Unable to render template {:?} -> {:?}",
@@ -934,7 +936,7 @@ fn get_intf_model(
     context.decl_stack.pop();
     context.output_type_name = "".to_string();
     ModelContext {
-        class_name: String::from(&*id.0),
+        class_name: String::from(id.0.as_str()),
         canonical_src_filepath: context.canonical_filepath.to_path_buf(),
         comment: Some(format!(
             "Model for {} typescript interface in {:?}",
@@ -1000,7 +1002,7 @@ impl TypeResolution {
             if &context.output_type_name != type_name && !is_builtin(type_name) {
                 self.imports.push(ModelImportContext {
                     name: type_name.clone(),
-                    src: format!("{}.gd", &type_name),
+                    src: format!("{}.gd", type_name.to_case(Case::Snake)),
                     gd_impl: self.gd_impl,
                     id: self.id.to_owned(),
                 })
@@ -2134,7 +2136,7 @@ mod tests {
             },
             common::iter::Iter,
         },
-        MediaType, ParseParams, ParsedSource, SourceTextInfo,
+        MediaType, ModuleSpecifier, ParseParams, ParsedSource, SourceTextInfo,
     };
     use indoc::indoc;
 
@@ -2210,8 +2212,10 @@ mod tests {
 
     fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
         let filename: PathBuf = filename.into();
+        let specifier = ModuleSpecifier::parse(&format!("file://{}", filename.to_string_lossy()))
+            .expect(&format!("can't parse filename {:?}", filename));
         let parsed_source = parse_module(ParseParams {
-            specifier: filename.to_string_lossy().into(),
+            specifier: specifier,
             media_type: MediaType::TypeScript,
             text_info: SourceTextInfo::new(source.into()),
             capture_tokens: true,
@@ -3903,7 +3907,7 @@ mod tests {
         let model = models.get(0).unwrap();
         assert_eq!(model.imports.len(), 1);
         let import = model.imports.get(0).unwrap();
-        assert_eq!(import.src, "AnyKind.gd");
+        assert_eq!(import.src, "any_kind.gd");
         assert_eq!(import.gd_impl, true);
     }
 
@@ -3928,7 +3932,7 @@ mod tests {
         let model = models.get(0).unwrap();
         assert_eq!(model.imports.len(), 1);
         let import = model.imports.get(0).unwrap();
-        assert_eq!(import.src, "AnyKind.gd");
+        assert_eq!(import.src, "any_kind.gd");
         assert_eq!(import.gd_impl, true);
     }
 
