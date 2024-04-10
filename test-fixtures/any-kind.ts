@@ -6,6 +6,7 @@ interface BKindValue {
   b: true;
 }
 
+// @typescript-to-gdscript-gd-impl
 interface KindEnvelope<T> {
   type: string;
   value: T;

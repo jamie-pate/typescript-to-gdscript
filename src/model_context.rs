@@ -15,40 +15,40 @@ var __initialized = false";
 pub const STATE_METHODS: &'static str = "\
 # Unset a property (as if it was never assigned)
 func unset(property_name) -> void:
-    __assigned_properties.erase(property_name)
+	__assigned_properties.erase(property_name)
 
 # Checks to see whether an optional property has been assigned or not.
 # Works for non-optional properties too though if update() has been called
 # then they should always be true.
 func is_set(property_name: String) -> bool:
-    return __initialized && property_name in __assigned_properties
+	return __initialized && property_name in __assigned_properties
 
 # Check to see if the incoming value was null....
 # Godot builtin types don't support nullability but TypeScript primitives do
 func is_null(property_name: String) -> bool:
-    return __initialized && property_name in __assigned_properties && __assigned_properties[property_name] == null
+	return __initialized && property_name in __assigned_properties && __assigned_properties[property_name] == null
 
 # Set a property value to null
 func set_null(property_name: String) -> void:
-    __assigned_properties[property_name] = null
-    if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
-        self[property_name] = null
+	__assigned_properties[property_name] = null
+	if property_name in self && typeof(self[property_name]) in [TYPE_OBJECT, TYPE_NIL]:
+		self[property_name] = null
 
 # True if this object has been flagged as a partial_deep instance
 func is_partial_deep() -> bool:
-    return __partial_deep
+	return __partial_deep
 
 # True if update() has been called
 func is_initialized() -> bool:
-    return __initialized
+	return __initialized
 
 # Keys where is_set(key) returns true
 func keys() -> Array:
-    return __assigned_properties.keys() if __initialized else []
+	return __assigned_properties.keys() if __initialized else []
 
 # Duplicate this instance into a new instance
 func duplicate():
-    return get_script().new(for_json())";
+	return get_script().new(for_json())";
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ModelImportContext {
