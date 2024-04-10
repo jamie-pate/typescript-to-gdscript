@@ -1,5 +1,6 @@
 #![allow(warnings)]
 #[macro_use]
+
 extern crate lazy_static;
 
 use convert_case::{Case, Casing};
@@ -22,6 +23,7 @@ use deno_ast::{
     },
     MediaType, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
     SourceRangedForSpanned, SourceTextInfo,
+    ModuleSpecifier,
 };
 
 use lazy_static::__Deref;
@@ -163,12 +165,13 @@ fn read_and_parse_file(import_stack: &mut Vec<PathBuf>, filename: &Path) -> Pars
         "Unable to read file {:?}\n${:#?}",
         filename, import_stack
     ));
+    let specifier = ModuleSpecifier::parse(
+        &format!("file://{}", filename.to_str().expect(&format!("filename invalid {:?}", filename)))
+    ).expect(
+        &format!("can't parse filename {:?}", filename)
+    );
     return parse_module(ParseParams {
-        specifier: String::from(
-            filename
-                .to_str()
-                .expect(&format!("filename invalid {:?}", filename)),
-        ),
+        specifier: specifier,
         media_type: MediaType::TypeScript,
         text_info: SourceTextInfo::new(source_text.into()),
         capture_tokens: true,
