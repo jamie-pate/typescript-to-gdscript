@@ -1944,6 +1944,7 @@ fn resolve_type_decl(
                 result.decl = Some(ResolutionDecl::TsInterfaceDecl(intf.to_owned()));
                 result.decl_context = Some(context.clone());
                 result.ctor_type = Some(result.type_name.clone());
+                result.gd_impl = have_directive(global, context, GD_IMPL_DIRECTIVE);
                 Some(result)
             } else {
                 None
@@ -3936,6 +3937,33 @@ mod tests {
     }
 
     #[test]
+    fn gd_impl_directive_imported_interface() {
+        let any_kind_src = "
+            /* @typescript-to-gdscript-gd-impl */
+            export interface SomeInterface {
+                interfaceValue: AKind | BKind;
+            }
+        ";
+        let src = "
+            import { SomeInterface } from \"./impl-interface.js\";
+            export interface A {
+                a: SomeInterface;
+            }
+        ";
+        let models = parse_and_get_models_with_imports(
+            "gd-impl-directive-imported-interface.ts",
+            &src,
+            &[&parse_from_string("impl-interface.ts", any_kind_src)],
+        );
+        assert_eq!(models.len(), 1);
+        let model = models.get(0).unwrap();
+        assert_eq!(model.imports.len(), 1);
+        let import = model.imports.get(0).unwrap();
+        assert_eq!(import.src, "some_interface.gd");
+        assert_eq!(import.gd_impl, true);
+    }
+
+    #[test]
     fn skip_directive() {
         let src = "
             // @typescript-to-gdscript-skip
@@ -3987,10 +4015,10 @@ mod tests {
     #[test]
     fn type_directive_local() {
         let src = "
-        // @typescript-to-gdscript-type: int
-        export type TeamId = number;
-        export interface A { interface_value: TeamId; }
-    ";
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+            export interface A { interface_value: TeamId; }
+        ";
         let models = parse_and_get_models("type-directive-across-modules.ts", &src);
         let interfaceValue = &models[0].var_descriptors[0];
         assert_eq!(interfaceValue.name, "interface_value");
@@ -3999,12 +4027,12 @@ mod tests {
     #[test]
     fn type_directive_on_property() {
         let src = "
-        export type TeamId = number;
-        export interface A { 
-            // @typescript-to-gdscript-type: unknown
-            interface_value: TeamId; 
-        }
-    ";
+            export type TeamId = number;
+            export interface A { 
+                // @typescript-to-gdscript-type: unknown
+                interface_value: TeamId; 
+            }
+        ";
         let models = parse_and_get_models("type-directive-on-property.ts", &src);
         let interfaceValue = &models[0].var_descriptors[0];
         assert_eq!(interfaceValue.name, "interface_value");
@@ -4014,13 +4042,13 @@ mod tests {
     #[ignore]
     fn type_directive_override_property() {
         let src = "
-        // @typescript-to-gdscript-type: int
-        export type TeamId = number;
-        export interface A { 
-            // @typescript-to-gdscript-type: unknown
-            interface_value: TeamId; 
-        }
-    ";
+            // @typescript-to-gdscript-type: int
+            export type TeamId = number;
+            export interface A { 
+                // @typescript-to-gdscript-type: unknown
+                interface_value: TeamId; 
+            }
+        ";
         let models = parse_and_get_models("type-directive-override-property.ts", &src);
         let interfaceValue = &models[0].var_descriptors[0];
         assert_eq!(interfaceValue.name, "interface_value");
