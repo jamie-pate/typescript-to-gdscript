@@ -1,6 +1,5 @@
 #![allow(warnings)]
 #[macro_use]
-
 extern crate lazy_static;
 
 use convert_case::{Case, Casing};
@@ -21,9 +20,8 @@ use deno_ast::{
             SyntaxContext,
         },
     },
-    MediaType, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
+    MediaType, ModuleSpecifier, ParseParams, ParsedSource, SourcePos, SourceRange, SourceRanged,
     SourceRangedForSpanned, SourceTextInfo,
-    ModuleSpecifier,
 };
 
 use lazy_static::__Deref;
@@ -165,11 +163,13 @@ fn read_and_parse_file(import_stack: &mut Vec<PathBuf>, filename: &Path) -> Pars
         "Unable to read file {:?}\n${:#?}",
         filename, import_stack
     ));
-    let specifier = ModuleSpecifier::parse(
-        &format!("file://{}", filename.to_str().expect(&format!("filename invalid {:?}", filename)))
-    ).expect(
-        &format!("can't parse filename {:?}", filename)
-    );
+    let specifier = ModuleSpecifier::parse(&format!(
+        "file://{}",
+        filename
+            .to_str()
+            .expect(&format!("filename invalid {:?}", filename))
+    ))
+    .expect(&format!("can't parse filename {:?}", filename));
     return parse_module(ParseParams {
         specifier: specifier,
         media_type: MediaType::TypeScript,
@@ -2133,6 +2133,7 @@ mod tests {
     use crate::{extract_module_models, ResolutionDecl};
     use cool_asserts::assert_panics;
     use deno_ast::swc::ast::TsTypeAliasDecl;
+    use deno_ast::ModuleSpecifier;
     use deno_ast::{
         parse_module,
         swc::{
@@ -2217,8 +2218,10 @@ mod tests {
 
     fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
         let filename: PathBuf = filename.into();
+        let specifier = ModuleSpecifier::parse(&format!("file://{}", filename.to_string_lossy()))
+            .expect(&format!("can't parse filename {:?}", filename));
         let parsed_source = parse_module(ParseParams {
-            specifier: filename.to_string_lossy().into(),
+            specifier,
             media_type: MediaType::TypeScript,
             text_info: SourceTextInfo::new(source.into()),
             capture_tokens: true,
@@ -3962,7 +3965,7 @@ mod tests {
         let model = models.get(0).unwrap();
         assert_eq!(model.imports.len(), 1);
         let import = model.imports.get(0).unwrap();
-        assert_eq!(import.src, "some_interface.gd");
+        assert_eq!(import.src, "SomeInterface.gd");
         assert_eq!(import.gd_impl, true);
     }
 
