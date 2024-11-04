@@ -801,6 +801,7 @@ fn get_intf_model(
     extending: Option<&Ident>,
 ) -> ModelContext {
     let mut owned_intf_context: ModuleContext;
+    let mut decl_span_current_context = true;
     let (id, type_params, decl_span, aliased_type, intf, context) = match decl {
         ResolutionDecl::TsInterfaceDecl(intf) => {
             let id = intf.id.to_id();
@@ -837,6 +838,7 @@ fn get_intf_model(
                     (&aliased_type.decl, aliased_type.decl_context.to_owned())
                 {
                     owned_intf_context = intf_context;
+                    decl_span_current_context = false;
                     (intf.to_owned(), &mut owned_intf_context)
                 } else {
                     panic!(
@@ -870,7 +872,9 @@ fn get_intf_model(
         },
         context.relative_filepath
     ));
-    context.pos.push(decl_span);
+    if decl_span_current_context {
+        context.pos.push(decl_span);
+    }
     context.decl_stack.push(decl.clone());
     context.id_stack.push(id.to_owned());
     let mut import_map: HashMap<String, ModelImportContext> = HashMap::new();
@@ -930,7 +934,9 @@ fn get_intf_model(
             b.gd_impl.cmp(&a.gd_impl)
         }
     });
-    context.pos.pop();
+    if decl_span_current_context {
+        context.pos.pop();
+    }
     global.stack.pop();
     context.id_stack.pop();
     context.decl_stack.pop();
@@ -2135,6 +2141,7 @@ mod tests {
     use crate::{extract_module_models, ResolutionDecl};
     use cool_asserts::assert_panics;
     use deno_ast::swc::ast::TsTypeAliasDecl;
+    use deno_ast::SourceRangedForSpanned;
     use deno_ast::{
         parse_module,
         swc::{
@@ -3878,6 +3885,66 @@ mod tests {
         assert_eq!(var_desc.name, "b");
         assert_eq!(var_desc.ctor.name, "C");
         assert_eq!(model.partial_deep, true);
+    }
+
+    #[test]
+    fn exported_partial_record_decl() {
+        let src_d = "
+            export interface D {
+                d: boolean;
+            }
+        ";
+        let src = "
+            import { D } from \"src-d.ts\";
+            import { PartialDeep } from \"type-fest\";
+
+            export interface C extends PartialDeep<D> {};
+            export type B = Record<string, C>;
+            export interface A {
+                b: B
+            };
+        ";
+        let mut models = parse_and_get_models_with_imports(
+            "exported-partial-record-decl.ts",
+            &src,
+            &[&parse_from_string("src-d.ts", src_d)],
+        );
+
+        let mut model_d = parse_and_get_model("src-d1.ts", src_d);
+        let mut model = models.get(0).unwrap();
+        assert_eq!(model.var_descriptors.len(), 1);
+        let var_desc = model.var_descriptors.get(0).unwrap();
+        // it should export C and A
+        assert_eq!(model.class_name, "C");
+        assert_eq!(var_desc.optional, true);
+        assert_eq!(var_desc.name, "d");
+        assert_eq!(var_desc.ctor.name, "bool");
+        assert_eq!(model.partial_deep, true);
+
+        let mut model2 = models.get(1).unwrap();
+        assert_eq!(model2.class_name, "B");
+
+        let mut model2 = models.get(2).unwrap();
+        assert_eq!(model2.class_name, "A");
+
+        let mut test_context = parse_from_string("exported-partial-record-decl.ts", &src);
+        let (mut global, mut context, parsed_source) = module_context(&test_context);
+        let mut exports = get_mc_exports(&mut context, &parsed_source);
+        if let (ResolutionDecl::TsInterfaceDecl(intf), export) = exports.remove(0) {
+            assert_eq!(intf.id.sym, String::from("C"));
+        } else {
+            panic!("Expected an intf export");
+        }
+        if let (ResolutionDecl::TsTypeAliasDecl(type_alias), export) = exports.remove(0) {
+            assert_eq!(type_alias.id.sym, String::from("B"));
+        } else {
+            panic!("Expected an intf export");
+        }
+        if let (ResolutionDecl::TsInterfaceDecl(intf), export) = exports.remove(0) {
+            assert_eq!(intf.id.sym, String::from("A"));
+        } else {
+            panic!("Expected an intf export");
+        }
     }
 
     #[test]
