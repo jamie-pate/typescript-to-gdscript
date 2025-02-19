@@ -2462,23 +2462,23 @@ mod tests {
         }
         assert_eq!(
             vars.get("obj").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else null"
+            " != null else null"
         );
         assert_eq!(
             vars.get("str").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else \"\""
+            " != null else \"\""
         );
         assert_eq!(
             vars.get("int").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else 0"
+            " != null else 0"
         );
         assert_eq!(
             vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else 0.0"
+            " != null else 0.0"
         );
         assert_eq!(
             vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else false"
+            " != null else false"
         );
     }
 
@@ -2525,19 +2525,19 @@ mod tests {
         }
         assert_eq!(
             vars.get("str").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else \"\""
+            " != null else \"\""
         );
         assert_eq!(
             vars.get("int").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else 0"
+            " != null else 0"
         );
         assert_eq!(
             vars.get("float").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else 0.0"
+            " != null else 0.0"
         );
         assert_eq!(
             vars.get("bool").unwrap().ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else false"
+            " != null else false"
         );
     }
 
@@ -2607,11 +2607,11 @@ mod tests {
         );
         assert_eq!(
             opt_a_of_str_or_null.ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else \"\""
+            " != null else \"\""
         );
         assert_eq!(
             opt_a_of_member_or_null.ctor.suffix.as_ref().unwrap(),
-            ") != TYPE_NIL else null"
+            " != null else null"
         );
     }
 
