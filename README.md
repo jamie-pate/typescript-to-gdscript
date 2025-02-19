@@ -1,6 +1,6 @@
 # typescript-to-gdscript
 
-Convert TypeScript type definitions into concrete models in GDScript for godot
+Convert TypeScript type definitions into concrete models in GDScript for Godot 4.4
 
 This utility enables a pipeline where TypeScript files containing interfaces can be transformed into gdscript classes.
 
@@ -161,11 +161,11 @@ func _init(src: Dictionary = {}, partial_deep = false) -> void:
 		update(src)
 
 func __set_optional_date(value: Iso8601Date):
-	__assigned_properties.optional_date = true if typeof(value) != TYPE_NIL else null
+	__assigned_properties.optional_date = true if value != null else null
 	optional_date = value
 
 func __set_nullable_optional_date(value: Iso8601Date):
-	__assigned_properties.nullable_optional_date = true if typeof(value) != TYPE_NIL else null
+	__assigned_properties.nullable_optional_date = true if value != null else null
 	nullable_optional_date = value
 
 
@@ -188,8 +188,8 @@ func update(src: Dictionary) -> void:
 		__assigned_properties.optional_date = true
 		optional_date = Iso8601Date.new(src.optionalDate, __partial_deep)
 	if "nullableOptionalDate" in src:
-		__assigned_properties.nullable_optional_date = true if typeof(src.nullableOptionalDate) != TYPE_NIL else null
-		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate, __partial_deep) if typeof(src.nullableOptionalDate) != TYPE_NIL else null
+		__assigned_properties.nullable_optional_date = true if src.nullableOptionalDate != null else null
+		nullable_optional_date = Iso8601Date.new(src.nullableOptionalDate, __partial_deep) if src.nullableOptionalDate != null else null
 	if !__partial_deep || "date" in src:
 		__assigned_properties.date = true
 		date = Iso8601Date.new(src.date, __partial_deep)
@@ -250,7 +250,7 @@ func for_json() -> Dictionary:
 	if is_set("optional_date"):
 		result.optionalDate = optional_date.for_json()
 	if is_set("nullable_optional_date"):
-		result.nullableOptionalDate = nullable_optional_date.for_json() if typeof(nullable_optional_date) != TYPE_NIL else null
+		result.nullableOptionalDate = nullable_optional_date.for_json() if nullable_optional_date != null else null
 	if !__partial_deep || is_set("date"):
 		result.date = date.for_json()
 	if !__partial_deep || is_set("str_lit"):

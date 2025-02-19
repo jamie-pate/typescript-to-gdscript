@@ -1,3 +1,4 @@
+@warning_ignore_start("incompatible_ternary")
 extends RefCounted
 {{- if comment }}
 # {comment}
@@ -37,7 +38,7 @@ func _init(src: { src_type.name } {{ if src_type.init }}= {src_type.init}{{ endi
 		update(src)
 {{ for var_decl in var_descriptors }}{{ if var_decl.optional }}
 func __set_{var_decl.name}(__value__{{ if var_decl.decl_type }}: {var_decl.decl_type}{{ endif }}):
-	__assigned_properties.{var_decl.name} = true if typeof(__value__) != TYPE_NIL else null
+	__assigned_properties.{var_decl.name} = true if __value__ != null else null
 	{var_decl.name} = __value__
 {{ endif }}{{ endfor }}
 
