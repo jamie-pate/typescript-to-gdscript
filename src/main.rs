@@ -41,7 +41,7 @@ use std::{
     env::{args, current_dir, current_exe},
     ffi::OsStr,
     fmt::Display,
-    fs::{create_dir_all, read_to_string, write},
+    fs::{canonicalize, create_dir_all, read_to_string, write},
     ops::DerefMut,
     path::{self, Path, PathBuf},
     process::exit,
@@ -186,7 +186,7 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
     // might need to actually resolve modules later?
 
     let mut result = filename.to_path_buf();
-    if !result.starts_with(".") && !result.has_root() {
+    if !result.starts_with(".") && !result.starts_with("..") && !result.has_root() {
         // this is a node_js module and I don't want to go
         // searching for types from that rat's nest
         return result;
@@ -201,7 +201,8 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
     if !result.has_root() {
         result = directory.join(result.strip_prefix("./").unwrap_or(&result));
     }
-    return result.with_extension("ts");
+    result = canonicalize(result).unwrap().with_extension("ts");
+    return result
 }
 
 fn parse_recursive(
@@ -228,7 +229,7 @@ fn parse_recursive(
         if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = node {
             let m_import_src = PathBuf::from(import.src.value.to_string());
             let m_filename = canonical_module_filename(directory, &m_import_src);
-            if m_import_src.starts_with(".") {
+            if m_import_src.starts_with(".") || m_import_src.starts_with("..") {
                 if (import_stack.contains(&m_filename)) {
                     if debug_print {
                         eprintln!(
@@ -1826,7 +1827,12 @@ fn resolve_imported_specifier_type<'a>(
             "resolve imported type_ref {:?} -> ${:?}",
             id, module_path
         ));
-        if let Some(parsed_source) = global.imported_modules.get(module_path) {
+        let directory = context.canonical_filepath.parent().expect(&format!(
+            "Filepath should not be an orphan {:?}",
+            context.canonical_filepath
+        ));
+        let canonical_module_path = canonical_module_filename(directory, module_path);
+        if let Some(parsed_source) = global.imported_modules.get(&canonical_module_path) {
             let parsed_source = Rc::clone(parsed_source);
             let dir = context.canonical_filepath.parent().expect(&format!(
                 "Expected {:?} to have a parent",
