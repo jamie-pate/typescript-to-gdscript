@@ -43,7 +43,7 @@ jobs:
           command: build
           args: --release --target=${{ matrix.target }}
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/typescript-to-gdscript*
@@ -71,7 +71,7 @@ jobs:
           command: build
           args: --release --target=${{ matrix.target }}
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/typescript-to-gdscript*
@@ -109,7 +109,7 @@ jobs:
           - x86_64-apple-darwin
     steps:
       - name: Download artifact ${{ matrix.target }}
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: ${{ matrix.target }}
