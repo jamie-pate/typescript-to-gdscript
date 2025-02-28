@@ -43,7 +43,7 @@ use std::{
     fmt::Display,
     fs::{canonicalize, create_dir_all, read_to_string, write},
     ops::DerefMut,
-    path::{self, Path, PathBuf},
+    path::{self, absolute, Path, PathBuf},
     process::exit,
     rc::Rc,
 };
@@ -186,23 +186,25 @@ fn canonical_module_filename<'a>(directory: &Path, filename: &'a Path) -> PathBu
     // might need to actually resolve modules later?
 
     let mut result = filename.to_path_buf();
+    if let Some(ext) = result.extension() {
+        if ext == "js" {
+            result = filename.with_extension("");
+            result = result.with_extension("ts");
+        }
+    }
     if !result.starts_with(".") && !result.starts_with("..") && !result.has_root() {
         // this is a node_js module and I don't want to go
         // searching for types from that rat's nest
         return result;
     }
-    if let Some(ext) = result.extension() {
-        if ext == "js" {
-            result = filename.with_extension("");
-        }
-    }
-    result = result.with_extension("ts");
 
     if !result.has_root() {
         result = directory.join(result.strip_prefix("./").unwrap_or(&result));
     }
-    result = canonicalize(result).unwrap().with_extension("ts");
-    return result
+    // use absolute instead of canonicalize because tests don't use the filesystem
+    result = absolute(result).unwrap();
+
+    return result;
 }
 
 fn parse_recursive(
@@ -2131,12 +2133,12 @@ mod tests {
     use std::{borrow::Borrow, collections::HashMap, path::PathBuf, rc::Rc};
 
     use crate::model_context::tests::indent;
+    use crate::{canonical_module_filename, extract_module_models, ResolutionDecl};
     use crate::{
         extract_import_specifiers, get_intf_model,
         model_context::{ModelContext, ModelImportContext, ModelVarDescriptor, DEFAULT_INDENT},
         ts_enum_to_model_enum, Context, ModuleContext, GD_IMPL_DIRECTIVE, TYPE_DIRECTIVE,
     };
-    use crate::{extract_module_models, ResolutionDecl};
     use cool_asserts::assert_panics;
     use deno_ast::swc::ast::TsTypeAliasDecl;
     use deno_ast::ModuleSpecifier;
@@ -2223,7 +2225,9 @@ mod tests {
     }
 
     fn parse_from_string<'a>(filename: &str, source: &str) -> TestContext {
+        let directory: PathBuf = "/".into();
         let filename: PathBuf = filename.into();
+        let filename: PathBuf = canonical_module_filename(&directory, &filename);
         let specifier = ModuleSpecifier::parse(&format!("file://{}", filename.to_string_lossy()))
             .expect(&format!("can't parse filename {:?}", filename));
         let parsed_source = parse_module(ParseParams {
@@ -2777,7 +2781,7 @@ mod tests {
             export interface B { bvalue: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends B { avalue: string; }
         ";
         let mut base_filename = "base-interface.ts";
@@ -2808,7 +2812,7 @@ mod tests {
             export interface B extends C { bvalue: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends B { avalue: string; }
         ";
         let mut base_filename = "base-interface.ts";
@@ -2839,12 +2843,12 @@ mod tests {
             export type TeamId = number;
         ";
         let base = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface C { cvalue: TeamId; }
             export interface B extends C { bvalue: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends B { avalue: string; }
         ";
         let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
@@ -2877,12 +2881,12 @@ mod tests {
             export type TeamId = number;
         ";
         let base = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface C { cvalue: TeamId; }
             export interface B extends C { bvalue: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends Readonly<B> { avalue: string; }
         ";
         let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
@@ -2923,7 +2927,7 @@ mod tests {
             export interface B extends C { overridden_value: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends Readonly<B> { avalue: string; }
         ";
         let mut d_test_context = parse_from_string("d-interface.ts", d_interface);
@@ -2957,12 +2961,12 @@ mod tests {
             export type TeamId = number;
         ";
         let base = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface C { readonly cvalue: TeamId; }
             export interface B extends C { bvalue: string; }
         ";
         let src = "
-            import { B } from \"./base-interface.ts\";
+            import { B } from \"base-interface.ts\";
             export interface A extends B { avalue: string; }
         ";
         let mut team_id_test_context = parse_from_string("team-id.ts", team_id);
@@ -3556,14 +3560,14 @@ mod tests {
             }
         ";
         let base_b = "
-            import { A } from \"./a.js\";
+            import { A } from \"a.js\";
             export interface B<T> {
                 b: T;
             }
         ";
         let src = "
-            import { A } from \"./a.js\";
-            import { B } from \"./b.js\";
+            import { A } from \"a.js\";
+            import { B } from \"b.js\";
             export interface C extends B<A> {
                 c: true;
             };
@@ -3774,7 +3778,7 @@ mod tests {
             export type B = PartialDeep<C>;
         ";
         let src = "
-            import { B } from \"./partial-deep-type-prop-b.js\";
+            import { B } from \"partial-deep-type-prop-b.js\";
             export interface a {
                 b: B
             }
@@ -3803,7 +3807,7 @@ mod tests {
             export interface B extends PartialDeep<C> {};
         ";
         let src = "
-            import { B } from \"./partial-deep-intf-prop-b.js\";
+            import { B } from \"partial-deep-intf-prop-b.js\";
             export interface a {
                 b: B
             }
@@ -3829,7 +3833,7 @@ mod tests {
             export type D = E;
         ";
         let src_b = "
-            import { D } from \"./src-d.js\";
+            import { D } from \"src-d.js\";
             interface C {
                 C: string;
                 d: D;
@@ -3840,7 +3844,7 @@ mod tests {
         ";
         let src = "
             import { PartialDeep } from \"type-fest\";
-            import { B } from \"./src-b.js\";
+            import { B } from \"src-b.js\";
             export type A = PartialDeep<B>;
         ";
         let mut model = parse_and_get_model_with_imports(
@@ -3930,7 +3934,7 @@ mod tests {
             export type AnyKind = AKind | BKind;
         ";
         let src = "
-            import { AnyKind } from \"./any-kind.js\";
+            import { AnyKind } from \"any-kind.js\";
             export interface A {
                 a: AnyKind;
             }
@@ -3957,7 +3961,7 @@ mod tests {
             }
         ";
         let src = "
-            import { SomeInterface } from \"./impl-interface.js\";
+            import { SomeInterface } from \"impl-interface.js\";
             export interface A {
                 a: SomeInterface;
             }
@@ -4011,7 +4015,7 @@ mod tests {
             export type TeamId = number;
         ";
         let src = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface A { interface_value: TeamId; }
         ";
         let models = parse_and_get_models_with_imports(
@@ -4073,7 +4077,7 @@ mod tests {
             export type TeamId = number;
         ";
         let src = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface A {
                 // @typescript-to-gdscript-type: unknown
                 interface_value: TeamId;
@@ -4096,7 +4100,7 @@ mod tests {
             export type TeamId = number;
         ";
         let src = "
-            import { TeamId } from \"./team-id.ts\";
+            import { TeamId } from \"team-id.ts\";
             export interface A {
                 // @typescript-to-gdscript-type: unknown
                 interface_value: TeamId;
