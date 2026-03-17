@@ -437,7 +437,7 @@ fn convert(
         ));
         write(&output_filepath, output)
             .expect(&format!("Unable to write file {:?}", &output_filepath));
-        println!("{:?}", &output_filepath);
+        println!("{}", output_filepath.display());
     }
 }
 
@@ -1823,7 +1823,12 @@ fn resolve_imported_specifier_type<'a>(
     id: &Id,
 ) -> Option<(TypeResolution, ModuleContext)> {
     let mut result: Option<(TypeResolution, ModuleContext)> = None;
-    let path = context.import_specifiers.get(id).to_owned();
+    // Lookup by symbol name only, ignoring span differences
+    let path = context
+        .import_specifiers
+        .iter()
+        .find(|(k, _)| k.0 == id.0)
+        .map(|(_, v)| v.to_owned());
     if let Some(module_path) = path {
         global.stack.push(format!(
             "resolve imported type_ref {:?} -> ${:?}",
@@ -1833,23 +1838,23 @@ fn resolve_imported_specifier_type<'a>(
             "Filepath should not be an orphan {:?}",
             context.canonical_filepath
         ));
-        let canonical_module_path = canonical_module_filename(directory, module_path);
+        let canonical_module_path = canonical_module_filename(directory, &module_path);
         if let Some(parsed_source) = global.imported_modules.get(&canonical_module_path) {
             let parsed_source = Rc::clone(parsed_source);
             let dir = context.canonical_filepath.parent().expect(&format!(
                 "Expected {:?} to have a parent",
                 &context.canonical_filepath
             ));
-            let relative_filepath = diff_paths(module_path, dir).expect(&format!(
+            let relative_filepath = diff_paths(&module_path, dir).expect(&format!(
                 "Pathdiff {:?} relative to {:?}",
-                module_path,
+                &module_path,
                 context.canonical_filepath.parent()
             ));
             global
                 .stack
                 .push(format!("found parsed module {:?}", &relative_filepath));
             let mut import_context =
-                ModuleContext::new(&relative_filepath, module_path, Rc::clone(&parsed_source));
+                ModuleContext::new(&relative_filepath, &module_path, Rc::clone(&parsed_source));
             let module = parsed_source.module();
             extract_import_specifiers(&mut import_context, module);
             let mut resolved: Option<TypeResolution> = None;
